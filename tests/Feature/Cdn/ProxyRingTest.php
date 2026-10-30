@@ -34,6 +34,8 @@ function ring(): ProxyRing
 
 beforeEach(function () {
     app()->detectEnvironment(fn () => 'production');
+    // Production is served over HTTPS, which is the scheme every edge URL follows ({@see \App\Models\Node::proxyScheme}).
+    config(['app.url' => 'https://api.example.com']);
     CdnSettings::fake([
         'provider' => 'self_hosted',
         'providers' => ['self_hosted' => ['token_secret' => 'secret'], 'bunny' => []],

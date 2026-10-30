@@ -280,6 +280,8 @@ describe('the deploy', function () {
 
     it('lets Traefik believe Cloudflare\'s forwarded address only on a node behind its proxy', function () {
         app()->detectEnvironment(fn () => 'production');
+        // HTTPS is what gives the edge a `websecure` entrypoint at all ({@see \App\Models\Node::proxyScheme}).
+        config(['app.url' => 'https://api.example.com']);
         config(['nuke.registry' => null]);
         Http::fake();
 

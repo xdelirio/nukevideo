@@ -35,7 +35,7 @@ class SelfHostedProvider implements CdnProvider
             throw new NoCdnNodeAvailableException;
         }
 
-        $url = Node::proxyScheme($local)."{$node->hostname}/".ltrim($path, '/');
+        $url = Node::proxyScheme()."{$node->hostname}/".ltrim($path, '/');
 
         return $this->sign($url, $ip, speedLimitKbps: $speedLimitKbps, expiresIn: $expiresIn);
     }
@@ -48,7 +48,7 @@ class SelfHostedProvider implements CdnProvider
             throw new NoCdnNodeAvailableException;
         }
 
-        return Node::proxyScheme($local).$node->hostname.'/'.ltrim($key, '/');
+        return Node::proxyScheme().$node->hostname.'/'.ltrim($key, '/');
     }
 
     /**
@@ -68,7 +68,7 @@ class SelfHostedProvider implements CdnProvider
         $path = '/'.ltrim($key, '/');
 
         return $this->sign(
-            Node::proxyScheme($local).$node->hostname.$path,
+            Node::proxyScheme().$node->hostname.$path,
             ip: null,
             acl: $path,
             speedLimitKbps: $speedLimitKbps,

@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\NodeAccel;
 use App\Enums\NodeType;
 use App\Observers\NodeObserver;
+use App\Services\NodeService;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -61,14 +62,16 @@ class Node extends Model
     }
 
     /**
-     * The scheme every URL to a proxy node is built with. Development terminates no TLS — the
-     * edge is plain HTTP behind Traefik's `web` entrypoint — and production only answers on
-     * `websecure`, so the link the API mints, the URL the health probe fetches and the
-     * `VOD_BASE_URL` a node is deployed with all have to agree on this one place.
+     * The scheme every URL to a proxy node is built with: the link the API mints, the URL the
+     * health probe fetches, the `VOD_BASE_URL` a node is deployed with and the Traefik router in
+     * front of the edge ({@see NodeService}) all have to agree on this one place.
+     * It follows APP_URL rather than the environment, so a development stack served over HTTPS
+     * works exactly like production, and a plain-HTTP one keeps working. An APP_URL with no
+     * scheme is taken as HTTPS, the safe side for links handed to the public.
      */
-    public static function proxyScheme(?bool $local = null): string
+    public static function proxyScheme(): string
     {
-        return ($local ?? app()->isLocal()) ? 'http://' : 'https://';
+        return (parse_url((string) config('app.url'), PHP_URL_SCHEME) ?: 'https').'://';
     }
 
     /**
