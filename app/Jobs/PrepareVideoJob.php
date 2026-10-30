@@ -76,7 +76,7 @@ class PrepareVideoJob implements ShouldQueue
      */
     private function handedToCapableNode(Video $video): bool
     {
-        $accels = $video->template->accels();
+        $accels = $video->encodingDefinition()?->accels() ?? [];
 
         if ($accels === [] || in_array(config('ffmpeg.node_accel'), $accels, true)) {
             return false;
@@ -298,7 +298,7 @@ class PrepareVideoJob implements ShouldQueue
      */
     private function releasedForMissingCapacity(Video $video): bool
     {
-        $missing = $video->template?->missingCapacity();
+        $missing = $video->encodingDefinition()?->missingCapacity();
 
         if (! $missing) {
             return false;

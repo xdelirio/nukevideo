@@ -24,6 +24,7 @@ class Video extends Model
 {
     protected $fillable = [
         'template_id',
+        'template_version_id',
         'user_id',
         'project_id',
         'node_id',
@@ -313,6 +314,30 @@ class Video extends Model
     public function template(): BelongsTo
     {
         return $this->belongsTo(Template::class);
+    }
+
+    /** The immutable encoding definition this video was ingested with ({@see TemplateVersion}). */
+    public function templateVersion(): BelongsTo
+    {
+        return $this->belongsTo(TemplateVersion::class);
+    }
+
+    /**
+     * What this video encodes with: its pinned version, so a template edited after the upload
+     * changes nothing for it. The live template only stands in for a row that has no version —
+     * one the versions backfill could not reach.
+     *
+     * @return array<string, mixed>
+     */
+    public function encodingQuery(): array
+    {
+        return $this->encodingDefinition()?->query ?? [];
+    }
+
+    /** {@see encodingQuery}, as the model that answers what it needs of the fleet. */
+    public function encodingDefinition(): TemplateVersion|Template|null
+    {
+        return $this->templateVersion ?? $this->template;
     }
 
     public function node(): BelongsTo

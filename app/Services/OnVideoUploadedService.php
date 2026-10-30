@@ -70,6 +70,9 @@ class OnVideoUploadedService
                     'user_id' => $user->id,
                     'project_id' => $project->id,
                     'template_id' => $template->id,
+                    // Pinned now: an edit to the template after this upload must not change what
+                    // this video is encoded, retried or extended with.
+                    'template_version_id' => $template->current_version_id,
                     'name' => $this->meta->filename,
                     'status' => VideoStatus::PENDING->value,
                     // `??`, not a plain read: metadata cached before this field existed unserializes

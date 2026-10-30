@@ -55,10 +55,12 @@ class CreateVideoStreamsService
 
     public function handle(Video $video, string $localPath): void
     {
-        $outputs = $video->template->query['outputs'] ?? [];
+        // The version pinned at ingest, never the template as edited since: a retry or re-probe
+        // must encode what the first run did.
+        $outputs = $video->encodingQuery()['outputs'] ?? [];
 
         if (empty($outputs)) {
-            throw new Exception("No outputs configured for template {$video->template->ulid}");
+            throw new Exception("No outputs configured for template {$video->template?->ulid}");
         }
 
         $this->trackMeta = $this->probeContainerTracks($localPath);
@@ -280,7 +282,7 @@ class CreateVideoStreamsService
         // zero video streams; PackageVideoJob only discovers that deep into packaging, as an empty
         // input list to shaka-packager. Fail loudly here instead.
         if (empty($videoIds)) {
-            throw new Exception("Output {$index} resolved no video renditions from template {$video->template->ulid}");
+            throw new Exception("Output {$index} resolved no video renditions from template {$video->template?->ulid}");
         }
 
         $audioConfig = $outputConfig['audio'] ?? [];

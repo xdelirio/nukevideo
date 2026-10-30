@@ -26,7 +26,7 @@ class WebhookDispatcher
         $payload = [
             'event' => $event,
             'timestamp' => now()->timestamp,
-            'data' => VideoData::fromModel($video->loadMissing(['outputs.streams', 'streams'])),
+            'data' => VideoData::fromModel($video->loadMissing(['outputs.streams', 'streams', 'template', 'templateVersion'])),
         ];
 
         DispatchWebhookJob::dispatch(

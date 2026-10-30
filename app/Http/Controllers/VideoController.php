@@ -29,7 +29,7 @@ class VideoController extends Controller
     public function index(Request $request, IndexVideosData $data)
     {
         $query = $request->project()->videos()
-            ->with(['outputs.streams', 'streams']);
+            ->with(['outputs.streams', 'streams', 'template', 'templateVersion']);
 
         if ($data->search) {
             $query->where('name', 'like', "%{$data->search}%");
@@ -148,7 +148,7 @@ class VideoController extends Controller
     public function show(Request $request, string $ulid)
     {
         $video = $request->project()->videos()
-            ->with(['outputs.streams', 'streams'])
+            ->with(['outputs.streams', 'streams', 'template', 'templateVersion'])
             ->where('ulid', $ulid)->firstOrFail();
 
         return response()->json(['data' => VideoData::fromModel($video)]);
@@ -160,7 +160,7 @@ class VideoController extends Controller
 
         return response()->json([
             'message' => 'Video updated successfully',
-            'data' => VideoData::fromModel($video->fresh()->load(['outputs.streams', 'streams'])),
+            'data' => VideoData::fromModel($video->fresh()->load(['outputs.streams', 'streams', 'template', 'templateVersion'])),
         ]);
     }
 
@@ -192,7 +192,7 @@ class VideoController extends Controller
 
         return response()->json([
             'message' => 'Video queued for another run successfully',
-            'data' => VideoData::fromModel($video->fresh()->load(['outputs.streams', 'streams'])),
+            'data' => VideoData::fromModel($video->fresh()->load(['outputs.streams', 'streams', 'template', 'templateVersion'])),
         ]);
     }
 

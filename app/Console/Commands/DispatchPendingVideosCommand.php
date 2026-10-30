@@ -44,7 +44,7 @@ class DispatchPendingVideosCommand extends Command
             // than a cursor, which cannot eager-load and would query the template once per video.
             $videos = Video::where('status', VideoStatus::PENDING->value)
                 ->where('priority', $priority->value)
-                ->with('template')
+                ->with(['template', 'templateVersion'])
                 ->lazyById(100);
 
             foreach ($videos as $video) {
@@ -84,7 +84,7 @@ class DispatchPendingVideosCommand extends Command
         // and the user's only copy a week later, over what is usually a reboot. Skipped
         // rather than stopping so one waiting GPU video cannot block the CPU queue
         // behind it.
-        if ($video->template?->missingCapacity()) {
+        if ($video->encodingDefinition()?->missingCapacity()) {
             return;
         }
 
@@ -200,7 +200,7 @@ class DispatchPendingVideosCommand extends Command
 
         // get(), not cursor(): the set is bounded by these very limits, so it is small, and the
         // template relation is genuinely eager-loaded instead of queried per row.
-        foreach (Video::whereIn('status', self::IN_FLIGHT)->with('template')->get() as $video) {
+        foreach (Video::whereIn('status', self::IN_FLIGHT)->with(['template', 'templateVersion'])->get() as $video) {
             foreach ($this->capacitiesOf($video) as $capacity) {
                 $counts[$capacity] = ($counts[$capacity] ?? 0) + 1;
             }
@@ -212,7 +212,7 @@ class DispatchPendingVideosCommand extends Command
     /**
      * The hardware families a video's chunks will land on.
      *
-     * Read from the TEMPLATE, not the streams: a pending video has none yet — they are created when
+     * Read from the pinned template VERSION, not the streams: a pending video has none yet — they are created when
      * {@see PrepareVideoJob} probes the source — and the routing is decided by the codec the
      * template asks for either way.
      *
@@ -220,6 +220,6 @@ class DispatchPendingVideosCommand extends Command
      */
     private function capacitiesOf(Video $video): array
     {
-        return $video->template?->capacities() ?: [Template::CPU];
+        return $video->encodingDefinition()?->capacities() ?: [Template::CPU];
     }
 }

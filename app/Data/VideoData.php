@@ -21,6 +21,9 @@ class VideoData extends Data
         public string $createdAt,
         public ?string $externalUserId,
         public ?string $externalResourceId,
+        /** The template, and the version of it, this video was encoded with. Later edits to the
+         *  template do not change it. Null once the template is gone. */
+        public ?VideoTemplateData $template,
         public string $thumbnailUrl,
         public string $storyboardUrl,
         /** @var OutputData[] */
@@ -47,6 +50,7 @@ class VideoData extends Data
             createdAt: $video->created_at->toIso8601String(),
             externalUserId: $video->external_user_id,
             externalResourceId: $video->external_resource_id,
+            template: VideoTemplateData::fromVideo($video),
             thumbnailUrl: $assets->for($video->ulid, Video::THUMBNAIL_FILENAME),
             storyboardUrl: $assets->for($video->ulid, Video::STORYBOARD_VTT_FILENAME),
             outputs: OutputData::collect($video->outputs)->all(),

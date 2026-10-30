@@ -263,6 +263,7 @@ onMounted(() => {
             </TableCell>
             <TableCell class="font-medium" :class="template.enabled ? '' : 'text-muted-foreground'">
               {{ template.name }}
+              <Badge variant="outline" class="ml-1.5 text-[10px] px-1.5 py-0 font-normal" title="Encoding version">v{{ template.version }}</Badge>
             </TableCell>
             <TableCell>
               <div class="flex items-center gap-2">

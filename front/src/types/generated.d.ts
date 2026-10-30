@@ -134,6 +134,7 @@ ulid: string,
 name: string,
 query: Record<string, any>,
 enabled: boolean,
+version: number,
 keepProcessedFiles: boolean,
 keepOriginal: boolean,
 commands: string[],
@@ -170,6 +171,7 @@ priority: App.Enums.VideoPriority,
 createdAt: string,
 externalUserId: string | null,
 externalResourceId: string | null,
+template: App.Data.VideoTemplateData | null,
 thumbnailUrl: string,
 storyboardUrl: string,
 outputs: App.Data.OutputData[],
@@ -180,6 +182,11 @@ servedSize: number,
 export type VideoDownloadLinksData = {
 links: App.Data.DownloadLinkData[],
 skipped: App.Data.SkippedTrackData[],
+};
+export type VideoTemplateData = {
+ulid: string,
+name: string,
+version: number | null,
 };
 export type VideoVodLinksData = {
 videoUlid: string,

@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useRoute } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import VideoService from '@/services/VideoService'
 import { formatBytes } from '@/utils/byteFormatter'
 import StorageSize from '@/components/StorageSize.vue'
@@ -373,6 +373,14 @@ onUnmounted(stopPolling)
               <Trash2 :size="13" />
             </Button>
           </div>
+        </div>
+        <div v-if="video.template" class="flex items-center justify-between py-2 border-b">
+          <span class="text-sm text-muted-foreground">Template</span>
+          <!-- The version it was encoded with, which later edits to the template do not change. -->
+          <RouterLink :to="`/templates/${video.template.ulid}`" class="flex items-center gap-1.5 text-sm font-semibold hover:underline truncate ml-2">
+            {{ video.template.name }}
+            <Badge v-if="video.template.version" variant="outline" class="text-[10px] px-1.5 py-0 font-normal">v{{ video.template.version }}</Badge>
+          </RouterLink>
         </div>
         <div class="flex items-center justify-between py-2 border-b">
           <span class="text-sm text-muted-foreground">Created</span>

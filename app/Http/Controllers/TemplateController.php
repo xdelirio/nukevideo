@@ -19,6 +19,7 @@ class TemplateController extends Controller
         $request->validate(['enabled' => 'sometimes|in:1,0,true,false']);
 
         $templates = $request->project()->templates()
+            ->with('currentVersion')
             ->when($request->has('enabled'), fn ($query) => $query->where('enabled', $request->boolean('enabled')))
             ->ordered()
             ->get();
@@ -107,7 +108,7 @@ class TemplateController extends Controller
         );
 
         return response()->json([
-            'data' => $project->templates()->ordered()->get()
+            'data' => $project->templates()->with('currentVersion')->ordered()->get()
                 ->map(fn ($t) => TemplateData::fromModel($t))->all(),
             'message' => 'Templates reordered successfully',
         ]);
