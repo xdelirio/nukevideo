@@ -24,6 +24,7 @@ class Output extends Model
 {
     protected $fillable = [
         'video_id',
+        'template_index',
         'status',
     ];
 

@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Data\Stream\UpdateStreamData;
+use App\Enums\StreamStatus;
 use App\Enums\VideoStatus;
+use App\Http\Controllers\MyCustomUppyController;
 use App\Models\Project;
 use App\Models\Stream;
 use App\Models\Video;
@@ -28,6 +30,8 @@ class StreamManagementService
             $video = $stream->video;
 
             Video::whereKey($video->id)->lockForUpdate()->first();
+
+            $this->assertNotProcessing($stream);
 
             if (! in_array($stream->type, ['audio', 'subtitle'], true)) {
                 throw ValidationException::withMessages(['message' => 'Only audio and subtitle tracks can be edited.'])->status(400);
@@ -73,18 +77,27 @@ class StreamManagementService
      */
     private function assertNameIsFree(Stream $stream, UpdateStreamData $data): void
     {
-        $query = Stream::where('video_id', $stream->video_id)
-            ->where('type', $stream->type)
-            ->whereKeyNot($stream->id)
-            ->whereRaw('LOWER(name) = ?', [mb_strtolower($data->name)]);
+        $this->assertNameAvailable($stream->video_id, $stream->type, $data->name, $data->forced, $stream->id);
+    }
 
-        if ($stream->type === 'subtitle') {
-            $query->where('forced', $data->forced);
+    /**
+     * {@see assertNameIsFree}, for a track that does not exist yet as well: an added track is held
+     * to the same rule before its upload even starts ({@see MyCustomUppyController}).
+     */
+    public function assertNameAvailable(int $videoId, string $type, string $name, bool $forced, ?int $exceptId = null, string $field = 'name'): void
+    {
+        $query = Stream::where('video_id', $videoId)
+            ->where('type', $type)
+            ->when($exceptId, fn ($q) => $q->whereKeyNot($exceptId))
+            ->whereRaw('LOWER(name) = ?', [mb_strtolower($name)]);
+
+        if ($type === 'subtitle') {
+            $query->where('forced', $forced);
         }
 
         if ($query->exists()) {
             throw ValidationException::withMessages([
-                'name' => 'Another '.$stream->type.' track of this video already uses that name.',
+                $field => 'Another '.$type.' track of this video already uses that name.',
             ]);
         }
     }
@@ -123,6 +136,8 @@ class StreamManagementService
 
             Video::whereKey($video->id)->lockForUpdate()->first();
 
+            $this->assertNotProcessing($stream);
+
             if (! in_array($video->status, [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])) {
                 throw ValidationException::withMessages(['message' => 'You cannot delete any stream until the video is processed.'])->status(400);
             }
@@ -140,8 +155,9 @@ class StreamManagementService
                 }
             }
 
-            // A FAILED video has no packaged manifests; only COMPLETED ones need S3 surgery.
-            if ($video->status === VideoStatus::COMPLETED->value) {
+            // A FAILED video has no packaged manifests; only COMPLETED ones need S3 surgery. Neither
+            // does a track whose addition failed: it was never grafted into them.
+            if ($video->status === VideoStatus::COMPLETED->value && $stream->status !== StreamStatus::FAILED) {
                 $this->manifests->removeStream($video, $stream);
 
                 // removeStream cleans up CMAF segments; the standalone VTT lives in the download
@@ -153,6 +169,19 @@ class StreamManagementService
 
             $stream->delete();
         });
+    }
+
+    /**
+     * A track being added is grafted into the manifests at the very end of its job, from rows read
+     * under this same lock ({@see TrackPublisher}). Editing it now would be reverted
+     * by the labels the job is about to publish, and deleting it would race the upload of segments
+     * nothing references any more.
+     */
+    private function assertNotProcessing(Stream $stream): void
+    {
+        if ($stream->status === StreamStatus::PROCESSING) {
+            throw ValidationException::withMessages(['message' => 'This track is still being processed.'])->status(409);
+        }
     }
 
     private function findOrFail(string $ulid, Project $project): Stream

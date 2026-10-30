@@ -2,8 +2,10 @@
 
 namespace App\Jobs;
 
+use App\DTOs\TrackUploadMeta;
 use App\Models\User;
 use App\Services\OnVideoUploadedService;
+use App\Services\TrackIngestService;
 use App\Services\UppyS3Service;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -29,9 +31,20 @@ class OnVideoUploaded implements ShouldQueue
         private int $size,
     ) {}
 
-    public function handle(OnVideoUploadedService $service): void
+    public function handle(OnVideoUploadedService $service, UppyS3Service $uploads, TrackIngestService $tracks): void
     {
         Log::info('OnVideoUploaded started', ['key' => $this->key, 'size' => $this->size]);
+
+        // Tracks for an already-processed video share the upload folder with new videos; what the
+        // upload IS lives in its metadata. A redelivery after the metadata was forgotten reaches
+        // the video path either way, whose idempotency check on streams.path covers both.
+        if ($uploads->getUploadMeta($this->key) instanceof TrackUploadMeta) {
+            $tracks->handle($this->key, $this->size);
+            Log::info('OnVideoUploaded completed as a track', ['key' => $this->key]);
+
+            return;
+        }
+
         $service->handle($this->key, $this->size);
         Log::info('OnVideoUploaded completed', ['key' => $this->key]);
     }

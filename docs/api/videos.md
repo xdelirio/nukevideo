@@ -508,4 +508,7 @@ including optional ids that associate the video with external systems:
 The other multipart endpoints take the upload's `key` and refuse (`403`) an upload that was not
 started by the same caller.
 
+The same endpoints upload an audio or subtitle track for a video that already finished processing,
+with `metadata.video` in place of `metadata.template` — see [Add a Track](/api/streams#add-a-track).
+
 These fields are stored on the video record and returned in API responses as `externalUserId` and `externalResourceId`. The `externalUserId` is also recorded in usage tracking, allowing you to query per-user metrics via the [Usage API](/api/analytics#usage).

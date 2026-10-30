@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Jobs\AddTrackJob;
 use App\Models\Output;
 use App\Models\Stream;
 use App\Models\Video;
@@ -44,6 +45,12 @@ class ManifestEditor
         'dash' => 'application/dash+xml',
         'hls' => 'application/vnd.apple.mpegurl',
     ];
+
+    /** The Content-Type a manifest of `$format` (`hls`|`dash`) must be written with ({@see CONTENT_TYPES}). */
+    public static function contentType(string $format): string
+    {
+        return self::CONTENT_TYPES[$format];
+    }
 
     /**
      * Drop a stream from every manifest that references it and delete its packaged segment tree.
@@ -161,10 +168,27 @@ class ManifestEditor
      */
     public function importDashSubtitles(string $masterXml, string $subsXml): ?string
     {
-        [$doc, $xpath] = $this->loadMpd($masterXml);
-        [$subsDoc, $subsXpath] = $this->loadMpd($subsXml);
+        return $this->importDashSets($masterXml, $subsXml, 'text');
+    }
 
-        if (! $doc || ! $subsDoc) {
+    /**
+     * Graft the audio AdaptationSet a single-track run wrote ({@see PackagerCommandBuilder::buildAudio})
+     * into a published manifest, for a track added after the video completed. Same renumbering and
+     * idempotency as {@see importDashSubtitles}. The Period's duration is the video's already, and
+     * the added audio is fitted to it before packaging, so nothing else in the MPD has to move.
+     */
+    public function importDashAudio(string $masterXml, string $audioXml): ?string
+    {
+        return $this->importDashSets($masterXml, $audioXml, 'audio');
+    }
+
+    /** {@see importDashSubtitles}, for the sets of one `contentType`. */
+    private function importDashSets(string $masterXml, string $sourceXml, string $contentType): ?string
+    {
+        [$doc, $xpath] = $this->loadMpd($masterXml);
+        [$sourceDoc, $sourceXpath] = $this->loadMpd($sourceXml);
+
+        if (! $doc || ! $sourceDoc) {
             return null;
         }
 
@@ -178,15 +202,15 @@ class ManifestEditor
         $nextRepId = $this->maxNumericId($xpath, '//m:Representation') + 1;
         $changed = false;
 
-        foreach ($subsXpath->query("//m:AdaptationSet[@contentType='text']") as $set) {
-            $tpl = $subsXpath->query('.//m:SegmentTemplate', $set)->item(0);
+        foreach ($sourceXpath->query("//m:AdaptationSet[@contentType='{$contentType}']") as $set) {
+            $tpl = $sourceXpath->query('.//m:SegmentTemplate', $set)->item(0);
 
             if (! $tpl instanceof DOMElement || ! preg_match('#^([^/]+)/#', $tpl->getAttribute('media'), $m)) {
                 continue;
             }
 
-            // Idempotent: this track's segments are already referenced as a text set in the master.
-            if ($xpath->query("//m:AdaptationSet[@contentType='text']//m:SegmentTemplate[contains(@media, '{$m[1]}/')]")->length) {
+            // Idempotent: this track's segments are already referenced by a set of this type.
+            if ($xpath->query("//m:AdaptationSet[@contentType='{$contentType}']//m:SegmentTemplate[contains(@media, '{$m[1]}/')]")->length) {
                 continue;
             }
 
@@ -231,7 +255,7 @@ class ManifestEditor
      *
      * @return list<array{cap:?int,format:string,path:string}>
      */
-    private function existingManifests(Video $video, Output $output): array
+    public function existingManifests(Video $video, Output $output): array
     {
         $output->loadMissing('streams');
         $disk = Storage::disk('s3');
@@ -746,24 +770,28 @@ class ManifestEditor
      * Merge the `#EXT-X-MEDIA:TYPE=SUBTITLES` lines from a throwaway subtitles master (the separate
      * subtitle run, {@see PackagerCommandBuilder::buildText}) into the real master, and
      * tag every variant with the subtitle group. The lines are shaka's own (URI points at the kept
-     * `{ulid}/index.m3u8`). Idempotent via the TYPE=SUBTITLES guard. Null if nothing merged.
+     * `{ulid}/index.m3u8`). Idempotent per track: a line whose URI the master already references is
+     * skipped, which is what lets a subtitle be added to a master that already carries some
+     * ({@see AddTrackJob}). Null if nothing merged.
      */
     public function hlsAddSubtitles(string $masterContent, string $subsMaster): ?string
     {
-        if (str_contains($masterContent, 'TYPE=SUBTITLES')) {
-            return null;
-        }
-
         $media = [];
         $group = null;
 
         foreach (preg_split('/\R/', $subsMaster) as $line) {
-            if (str_starts_with($line, '#EXT-X-MEDIA') && str_contains($line, 'TYPE=SUBTITLES')) {
-                $media[] = $line;
+            if (! str_starts_with($line, '#EXT-X-MEDIA') || ! str_contains($line, 'TYPE=SUBTITLES')) {
+                continue;
+            }
 
-                if (preg_match('/GROUP-ID="([^"]+)"/', $line, $g)) {
-                    $group = $g[1];
-                }
+            if (preg_match('/URI="([^"]+)"/', $line, $uri) && str_contains($masterContent, "URI=\"{$uri[1]}\"")) {
+                continue;
+            }
+
+            $media[] = $line;
+
+            if (preg_match('/GROUP-ID="([^"]+)"/', $line, $g)) {
+                $group = $g[1];
             }
         }
 
@@ -771,24 +799,121 @@ class ManifestEditor
             return null;
         }
 
-        $out = [];
-        $inserted = false;
+        return $this->hlsInsertMedia($masterContent, $media, 'SUBTITLES', function (string $line) use ($group) {
+            return str_contains($line, 'SUBTITLES=') ? $line : $line.",SUBTITLES=\"{$group}\"";
+        });
+    }
 
-        foreach (preg_split('/\R/', $masterContent) as $line) {
-            if (str_starts_with($line, '#EXT-X-STREAM-INF')) {
-                if (! $inserted) {
-                    array_push($out, ...$media);
-                    $inserted = true;
-                }
+    /**
+     * Graft the audio rendition a single-track run wrote ({@see PackagerCommandBuilder::buildAudio})
+     * into a published master, for a track added after the video completed. The throwaway master
+     * carries the track's `#EXT-X-MEDIA` line and one audio-only variant, whose CODECS and BANDWIDTH
+     * are the track's own.
+     *
+     * Every variant must declare every codec it may play (RFC 8216 §4.3.4.2), so the audio codec is
+     * appended where missing. A master with no audio at all — a silent source — also has to gain the
+     * group on every variant, and its declared peak the track's rate: those variants never counted
+     * any audio. Where a group already exists the peak already counts its heaviest rendition
+     * (`$groupPeak`, bits/s) and a player plays one at a time, so it only grows by what the added
+     * track exceeds that by; null leaves it alone. Only one rendition of a group may be DEFAULT, so
+     * the added one never is when the group has members. Idempotent by the track's URI. Null if
+     * nothing changed.
+     */
+    public function hlsAddAudio(string $masterContent, string $audioMaster, ?int $groupPeak = null): ?string
+    {
+        $media = null;
+        $codecs = null;
+        $bandwidth = 0;
 
-                if (! str_contains($line, 'SUBTITLES=')) {
-                    $line .= ",SUBTITLES=\"{$group}\"";
+        foreach (preg_split('/\R/', $audioMaster) as $line) {
+            if (str_starts_with($line, '#EXT-X-MEDIA') && str_contains($line, 'TYPE=AUDIO')) {
+                $media = $line;
+            } elseif (str_starts_with($line, '#EXT-X-STREAM-INF')) {
+                $codecs = preg_match('/CODECS="([^"]+)"/', $line, $c) ? $c[1] : null;
+                $bandwidth = preg_match('/(?<![-A-Z])BANDWIDTH=(\d+)/', $line, $b) ? (int) $b[1] : 0;
+            }
+        }
+
+        if ($media === null || ! preg_match('/URI="([^"]+)"/', $media, $uri) || str_contains($masterContent, "URI=\"{$uri[1]}\"")) {
+            return null;
+        }
+
+        $hasAudio = str_contains($masterContent, 'TYPE=AUDIO');
+
+        if ($hasAudio) {
+            // An enumerated-string, so not through hlsSetMediaAttributes, which quotes.
+            $media = str_replace(',DEFAULT=YES', ',DEFAULT=NO', $media);
+        }
+
+        $raise = match (true) {
+            ! $hasAudio => $bandwidth,
+            $groupPeak !== null => max(0, $bandwidth - $groupPeak),
+            default => 0,
+        };
+
+        return $this->hlsInsertMedia($masterContent, [$media], 'AUDIO', function (string $line) use ($hasAudio, $codecs, $raise) {
+            if ($codecs !== null && preg_match('/CODECS="([^"]*)"/', $line, $c)) {
+                $listed = array_filter(explode(',', $c[1]));
+                $missing = array_diff(explode(',', $codecs), $listed);
+
+                if ($missing !== []) {
+                    $line = str_replace($c[0], 'CODECS="'.implode(',', [...$listed, ...$missing]).'"', $line);
                 }
             }
 
-            $out[] = $line;
+            if ($raise > 0) {
+                $line = preg_replace_callback(
+                    '/((?<![-A-Z])BANDWIDTH|AVERAGE-BANDWIDTH)=(\d+)/',
+                    fn ($m) => $m[1].'='.((int) $m[2] + $raise),
+                    $line,
+                );
+            }
+
+            if (! $hasAudio && ! str_contains($line, 'AUDIO=')) {
+                $line .= ',AUDIO="audio"';
+            }
+
+            return $line;
+        });
+    }
+
+    /**
+     * Insert `$media` right after the master's last `#EXT-X-MEDIA` line of `$type` — keeping a
+     * group's renditions together, in the order players list them — or before the first variant
+     * when the group is new, and pass every `#EXT-X-STREAM-INF` line through `$variant`.
+     *
+     * @param  list<string>  $media
+     * @param  callable(string):string  $variant
+     */
+    private function hlsInsertMedia(string $masterContent, array $media, string $type, callable $variant): ?string
+    {
+        $lines = preg_split('/\R/', $masterContent);
+        $anchor = null;
+
+        foreach ($lines as $i => $line) {
+            if (str_starts_with($line, '#EXT-X-MEDIA') && str_contains($line, "TYPE={$type}")) {
+                $anchor = $i + 1;
+            }
         }
 
-        return $inserted ? implode("\n", $out) : null;
+        if ($anchor === null) {
+            foreach ($lines as $i => $line) {
+                if (str_starts_with($line, '#EXT-X-STREAM-INF')) {
+                    $anchor = $i;
+                    break;
+                }
+            }
+        }
+
+        if ($anchor === null) {
+            return null;
+        }
+
+        array_splice($lines, $anchor, 0, $media);
+
+        return implode("\n", array_map(
+            fn (string $line) => str_starts_with($line, '#EXT-X-STREAM-INF') ? $variant($line) : $line,
+            $lines,
+        ));
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Observers;
 
 use App\Enums\VideoStatus;
+use App\Jobs\AddTrackJob;
 use App\Jobs\CleanupVideoResourcesJob;
 use App\Models\Stream;
 use App\Services\UppyS3Service;
@@ -17,9 +18,11 @@ class StreamObserver
      * to the last one. `path` is the one that happens: archiving an `original` rewrites it on an
      * already-completed video ({@see CleanupVideoResourcesJob::archiveOriginal}). `updated_at` is
      * listed because every update carries it — leave it out and the diff below is never empty, so
-     * the `path` filter would never fire.
+     * the `path` filter would never fire. `status` and `error_log` move while a track is being added
+     * to a completed video; that job announces its own outcome ({@see AddTrackJob}),
+     * so each flip would only be a duplicate of it.
      */
-    private const SILENT_COLUMNS = ['path', 'updated_at'];
+    private const SILENT_COLUMNS = ['path', 'updated_at', 'status', 'error_log'];
 
     /** {@see withoutAnnouncing} */
     private static bool $announcing = true;

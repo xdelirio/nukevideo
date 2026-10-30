@@ -116,6 +116,7 @@ export type StreamData = {
 ulid: string,
 name: string | null,
 type: string,
+status: App.Enums.StreamStatus | null,
 packageSize: number | null,
 fileSize: number | null,
 inputParams: Record<string, any> | null,
@@ -487,6 +488,7 @@ export type MetricUnit = 'bytes' | 'seconds' | 'count';
 export type NodeAccel = 'intel' | 'nvidia';
 export type NodeAction = 'deploy' | 'start' | 'stop';
 export type NodeType = 'worker' | 'proxy';
+export type StreamStatus = 'processing' | 'ready' | 'failed';
 export type UsageGranularity = 'total' | 'daily';
 export type UsageMetric = 'upload_bytes' | 'encoding_cpu' | 'streaming_bytes' | 'download_bytes' | 'asset_bytes' | 'bandwidth_bytes' | 'origin_bytes';
 export type VideoPriority = 'low' | 'normal' | 'high';

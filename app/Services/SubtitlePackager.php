@@ -140,10 +140,9 @@ class SubtitlePackager
     /**
      * Graft the packaged text entries into one manifest in place.
      *
-     * A track-by-track retry yields one throwaway manifest per track, and the two formats take them
-     * differently: the DASH import is additive and skips text sets already present, so it chains;
-     * `hlsAddSubtitles` bails out as soon as the master carries subtitles, so every track's
-     * `#EXT-X-MEDIA` lines have to reach it in a single call.
+     * A track-by-track retry yields one throwaway manifest per track. Both grafts are additive and
+     * skip tracks already present, so HLS could chain per document like DASH; it still takes them in
+     * one call, which tags the variants once.
      *
      * @param  list<string>  $packaged
      */

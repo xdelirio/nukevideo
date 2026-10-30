@@ -16,6 +16,8 @@ import { ApiException } from '@/exceptions/ApiException'
 import StreamService from '@/services/StreamService'
 type Stream = App.Data.StreamData
 import { MoreVertical, Pencil, Trash2, Video, Music, Subtitles, ChevronDown, Asterisk, Download } from '@lucide/vue'
+import { Badge } from '@/components/ui/badge'
+import { Spinner } from '@/components/ui/spinner'
 import StorageSize from '@/components/StorageSize.vue'
 import { toast } from 'vue-sonner'
 
@@ -35,7 +37,11 @@ const isDeleteDialogOpen = ref(false)
 const isForced = computed(() => stream.type === 'subtitle' && stream.forced)
 
 // Only audio and text tracks carry a name, language or forced flag in a manifest.
-const canEdit = computed(() => editable && ['audio', 'subtitle'].includes(stream.type))
+// A track still being added is locked until it is published: the API answers 409.
+const isProcessing = computed(() => stream.status === 'processing')
+const isFailed = computed(() => stream.status === 'failed')
+
+const canEdit = computed(() => editable && !isProcessing.value && !isFailed.value && ['audio', 'subtitle'].includes(stream.type))
 
 // A null fileSize means the raw track was not retained (the template dropped processed files),
 // so there is no object to hand out and the API would answer 404. `original` is never
@@ -131,6 +137,10 @@ const details = computed(() => {
           <div class="flex items-center gap-1.5">
             <span class="text-sm font-medium leading-tight">{{ label }}</span>
             <Asterisk v-if="isForced" :size="13" class="text-amber-500 shrink-0" title="Forced subtitle" />
+            <Badge v-if="isProcessing" variant="secondary" class="text-[10px] px-1.5 py-0 gap-1">
+              <Spinner class="size-3" /> Processing
+            </Badge>
+            <Badge v-else-if="isFailed" variant="destructive" class="text-[10px] px-1.5 py-0">Failed</Badge>
           </div>
           <div v-if="details.length" class="text-xs text-muted-foreground mt-0.5">
             <span v-for="(d, i) in details" :key="i">
@@ -157,7 +167,7 @@ const details = computed(() => {
           <ChevronDown :size="14" :class="{ 'rotate-180': isErrorExpanded }" class="transition-transform" />
         </Button>
 
-        <DropdownMenu>
+        <DropdownMenu v-if="!isProcessing">
           <DropdownMenuTrigger as-child>
             <Button variant="ghost" size="icon" class="h-7 w-7">
               <MoreVertical :size="14" />
