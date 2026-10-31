@@ -84,7 +84,7 @@ class StreamManagementService
      * {@see assertNameIsFree}, for a track that does not exist yet as well: an added track is held
      * to the same rule before its upload even starts ({@see MyCustomUppyController}).
      */
-    public function assertNameAvailable(int $videoId, string $type, string $name, bool $forced, ?int $exceptId = null, string $field = 'name'): void
+    public function assertNameAvailable(int $videoId, string $type, string $name, bool $forced, ?int $exceptId = null): void
     {
         $query = Stream::where('video_id', $videoId)
             ->where('type', $type)
@@ -100,7 +100,7 @@ class StreamManagementService
 
         if ($query->exists()) {
             throw ValidationException::withMessages([
-                $field => 'Another '.$type.' track of this video already uses that name.',
+                'name' => 'Another '.$type.' track of this video already uses that name.',
             ]);
         }
     }

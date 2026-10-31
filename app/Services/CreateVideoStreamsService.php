@@ -483,7 +483,7 @@ class CreateVideoStreamsService
      * touched: AAC's `-q:a` and fdk's `-vbr` pick their own rate and ignore `-b:a`. The floor is
      * there for a bogus probe value, not a real track; nothing ships under 32k.
      */
-    public static function capAudioBitrateToSource(array $params, ?int $sourceRate): array
+    private static function capAudioBitrateToSource(array $params, ?int $sourceRate): array
     {
         if ($sourceRate === null || empty($params['audio_bitrate']) || isset($params['audio_vbr']) || isset($params['audio_vbr_fdk'])) {
             return $params;
