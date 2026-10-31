@@ -29,7 +29,7 @@ type TrackType = 'audio' | 'subtitle'
 const { videoUlid } = defineProps<{ videoUlid: string }>()
 const emit = defineEmits<{ added: [] }>()
 
-/** Mirrors the API's allowlist (MyCustomUppyController::TRACK_EXTENSIONS); the server has the last word. */
+/** Mirrors the API's allowlist (TrackIngestService::EXTENSIONS) to pre-fill the type and the file picker; the server has the last word. */
 const EXTENSIONS: Record<TrackType, string[]> = {
   audio: [
     'wav',
@@ -197,7 +197,7 @@ defineExpose({ show })
         </div>
         <div class="grid gap-2">
           <Label for="add_track_name">Name</Label>
-          <Input id="add_track_name" v-model="form.name" required :disabled="uploading" />
+          <Input id="add_track_name" v-model="form.name" required maxlength="240" :disabled="uploading" />
           <p class="text-xs text-muted-foreground">Shown in the player's track selector.</p>
         </div>
         <div class="grid gap-2">
@@ -241,8 +241,8 @@ defineExpose({ show })
           </div>
           <Switch id="add_track_sdh" v-model="form.hearingImpaired" :disabled="uploading" />
         </div>
-        <Progress v-if="uploading" :model-value="progress" class="h-1.5" />
-        <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
+        <Progress v-if="uploading" :model-value="progress" class="h-1.5" aria-label="Upload progress" />
+        <p v-if="error" role="alert" class="text-sm text-destructive">{{ error }}</p>
         <DialogFooter>
           <Button type="submit" :disabled="uploading || !file">
             {{ uploading ? `Uploading… ${progress}%` : 'Upload' }}

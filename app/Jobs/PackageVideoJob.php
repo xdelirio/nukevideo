@@ -12,7 +12,6 @@ use App\Models\Video;
 use App\Services\Cdn\SelfHostedProvider;
 use App\Services\ChunkTranscodeService;
 use App\Services\CreateVideoStreamsService;
-use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
 use App\Services\SubtitlePackager;
 use App\Support\Scratch;
@@ -428,10 +427,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
      */
     private function makeBuilder(): PackagerCommandBuilder
     {
-        return new PackagerCommandBuilder(
-            (string) config('packager.bin'),
-            (int) config('packager.segment_duration'),
-        );
+        return PackagerCommandBuilder::fromConfig();
     }
 
     private function runPackager(Video $video, array $inputs, string $outputDir, array $formats, Output $output, ?int $cap): void
@@ -459,8 +455,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         $subtitles->packageAndGraft(
             $this->subtitleInputs($video, $gatherDir),
             $gatherDir,
-            // A segment longer than the video spans it in one piece.
-            (int) ceil((float) $video->duration) + 2,
+            SubtitlePackager::segmentDurationFor($video),
             $this->timeout - 120,
             ['video' => $video->id],
             fn () => $this->heartbeat($video),
@@ -606,21 +601,6 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         return $moved ? $processedDir : null;
     }
 
-    /** Forced on upload: s5cmd sniffs content instead of trusting the extension, and types `.mpd` as
-     *  `text/xml` and `.m3u8` as `audio/x-mpegurl`. Neither is in the VOD edge's `secure_token_types`,
-     *  so it never signs the segment URLs a manifest lists and players 403. Manifest values match
-     *  {@see ManifestEditor}'s.
-     *
-     *  Order is load-bearing: {@see syncToPrimary} runs one pass per entry and each pass lists the
-     *  destination, so the bulk extension goes last and the others list a near-empty prefix. */
-    public const SYNC_CONTENT_TYPES = [
-        'mpd' => 'application/dash+xml',
-        'm3u8' => 'application/vnd.apple.mpegurl',
-        'vtt' => 'text/vtt',
-        'mp4' => 'video/mp4',
-        'm4s' => 'video/iso.segment',
-    ];
-
     /**
      * `s5cmd sync` of the gathered tree (manifests + segment dirs) to the video's PLAYBACK zone: one
      * pass per known extension with its Content-Type forced, then a catch-all for the rest. A pass
@@ -632,19 +612,9 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
      */
     private function syncToPrimary(Video $video, string $gatherDir, ?string $processedDir): void
     {
-        $dest = $this->s3Uri('s3', "{$video->playPrefix()}/");
         $timeout = $this->timeout - 120;
 
-        foreach (self::SYNC_CONTENT_TYPES as $ext => $contentType) {
-            $this->s5cmdSync('s3', "{$gatherDir}/", $dest, $video, $timeout, [
-                '--include', "*.{$ext}", '--content-type', $contentType,
-            ]);
-        }
-
-        $excludes = collect(self::SYNC_CONTENT_TYPES)->keys()
-            ->flatMap(fn (string $ext) => ['--exclude', "*.{$ext}"])->all();
-
-        $this->s5cmdSync('s3', "{$gatherDir}/", $dest, $video, $timeout, $excludes);
+        $this->s5cmdSyncTyped('s3', "{$gatherDir}/", $this->s3Uri('s3', "{$video->playPrefix()}/"), $video, $timeout);
 
         // Its own pass to the download zone: these are full-quality masters, not something a
         // playback token should reach ({@see relocateProcessedRenditions}).

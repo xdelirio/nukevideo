@@ -6,6 +6,7 @@ use App\Jobs\PrepareVideoJob;
 use App\Models\Video;
 use App\Services\Concerns\DetectsStreamCopy;
 use App\Services\Concerns\ResolvesRateControl;
+use App\Support\Bitrate;
 use Exception;
 use FFMpeg\FFProbe;
 use FFMpeg\FFProbe\DataMapping\Format;
@@ -488,7 +489,7 @@ class CreateVideoStreamsService
             return $params;
         }
 
-        $asked = (int) round((float) $params['audio_bitrate'] * (str_ends_with(strtolower((string) $params['audio_bitrate']), 'k') ? 1000 : 1));
+        $asked = (int) Bitrate::toBps($params['audio_bitrate']);
         $cap = max(self::MIN_AUDIO_BPS, $sourceRate);
 
         if ($asked > $cap) {

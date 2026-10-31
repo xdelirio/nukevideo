@@ -107,3 +107,27 @@ it('records the template index on each output', function () {
 
     expect($video->outputs()->orderBy('id')->pluck('template_index')->all())->toBe([0, 1]);
 });
+
+it('removes a failed track from manifests it was left grafted into', function () {
+    // A worker killed between the manifest writes and the commit: grafted, failed, unattached.
+    $output = Output::create(['video_id' => $this->video->id, 'status' => 'completed']);
+    $stream = ($this->track)(['status' => StreamStatus::FAILED, 'type' => 'subtitle']);
+    $hls = "{$this->video->playPrefix()}/{$output->ulid}.m3u8";
+    Storage::disk('s3')->put($hls, implode("\n", [
+        '#EXTM3U',
+        "#EXT-X-MEDIA:TYPE=SUBTITLES,URI=\"{$stream->ulid}/index.m3u8\",GROUP-ID=\"subs\",LANGUAGE=\"en\",NAME=\"English\"",
+        '#EXT-X-STREAM-INF:BANDWIDTH=1,SUBTITLES="subs"',
+        'v/index.m3u8',
+    ]));
+
+    $this->deleteJson("/api/streams/{$stream->ulid}")->assertOk();
+
+    expect(Storage::disk('s3')->get($hls))->not->toContain($stream->ulid);
+});
+
+it('lets a failed track keep a name another track takes afterwards', function () {
+    ($this->track)(['status' => StreamStatus::FAILED, 'name' => 'Spanish']);
+    $live = ($this->track)(['name' => 'Other']);
+
+    $this->putJson("/api/streams/{$live->ulid}", ['name' => 'Spanish', 'language' => 'es', 'forced' => false])->assertOk();
+});

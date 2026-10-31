@@ -19,6 +19,40 @@ trait SyncsViaS5cmd
 {
     use EmitsHeartbeat;
 
+    /** Forced on upload: s5cmd sniffs content instead of trusting the extension, and types `.mpd` as
+     *  `text/xml` and `.m3u8` as `audio/x-mpegurl`. Neither is in the VOD edge's `secure_token_types`,
+     *  so it never signs the segment URLs a manifest lists and players 403. Manifest values match
+     *  {@see ManifestEditor}'s.
+     *
+     *  Order is load-bearing: {@see s5cmdSyncTyped} runs one pass per entry and each pass lists the
+     *  destination, so the bulk extension goes last and the others list a near-empty prefix. */
+    public const SYNC_CONTENT_TYPES = [
+        'mpd' => 'application/dash+xml',
+        'm3u8' => 'application/vnd.apple.mpegurl',
+        'vtt' => 'text/vtt',
+        'mp4' => 'video/mp4',
+        'm4s' => 'video/iso.segment',
+    ];
+
+    /**
+     * {@see s5cmdSync} of a packaged tree to the playback zone: one pass per known extension with
+     * its Content-Type forced ({@see SYNC_CONTENT_TYPES}), then a catch-all for the rest. A pass
+     * whose filter matches nothing (an HLS-less output has no `.m3u8`) is a no-op, not an error.
+     */
+    private function s5cmdSyncTyped(string $disk, string $source, string $dest, Video $video, int $timeout): void
+    {
+        foreach (self::SYNC_CONTENT_TYPES as $ext => $contentType) {
+            $this->s5cmdSync($disk, $source, $dest, $video, $timeout, [
+                '--include', "*.{$ext}", '--content-type', $contentType,
+            ]);
+        }
+
+        $excludes = collect(self::SYNC_CONTENT_TYPES)->keys()
+            ->flatMap(fn (string $ext) => ['--exclude', "*.{$ext}"])->all();
+
+        $this->s5cmdSync($disk, $source, $dest, $video, $timeout, $excludes);
+    }
+
     /**
      * `s5cmd sync $source $dest` with the given disk's credentials. `$source`/`$dest` are a local
      * path and an `s3://…` URI in either order; s3 sources need a glob (`s3://bucket/prefix/*`).

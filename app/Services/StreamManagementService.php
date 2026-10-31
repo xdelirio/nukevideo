@@ -89,6 +89,9 @@ class StreamManagementService
         $query = Stream::where('video_id', $videoId)
             ->where('type', $type)
             ->when($exceptId, fn ($q) => $q->whereKeyNot($exceptId))
+            // A track whose addition failed is in no manifest, so its name collides with nothing a
+            // player sees; counting it would refuse the retry of the very same upload.
+            ->where(fn ($q) => $q->whereNull('status')->orWhere('status', '!=', StreamStatus::FAILED->value))
             ->whereRaw('LOWER(name) = ?', [mb_strtolower($name)]);
 
         if ($type === 'subtitle') {
@@ -155,9 +158,15 @@ class StreamManagementService
                 }
             }
 
-            // A FAILED video has no packaged manifests; only COMPLETED ones need S3 surgery. Neither
-            // does a track whose addition failed: it was never grafted into them.
-            if ($video->status === VideoStatus::COMPLETED->value && $stream->status !== StreamStatus::FAILED) {
+            // A FAILED video has no packaged manifests; only COMPLETED ones need S3 surgery. A track
+            // whose addition failed is normally in none of them either, but a worker killed in the
+            // instant between the manifest writes and the commit leaves it grafted and unattached —
+            // so it is searched for in every output. Where it is absent this changes nothing.
+            if ($video->status === VideoStatus::COMPLETED->value) {
+                if ($stream->status === StreamStatus::FAILED) {
+                    $stream->setRelation('outputs', $video->outputs);
+                }
+
                 $this->manifests->removeStream($video, $stream);
 
                 // removeStream cleans up CMAF segments; the standalone VTT lives in the download

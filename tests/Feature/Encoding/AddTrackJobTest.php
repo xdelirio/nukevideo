@@ -15,9 +15,11 @@ use App\Models\Project;
 use App\Models\Stream;
 use App\Models\User;
 use App\Services\TrackIngestService;
+use App\Services\TrackPublisher;
 use App\Support\TrackProbe;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -92,7 +94,7 @@ beforeEach(function () {
         ]);
     };
 
-    $this->run = fn (Stream $stream) => (new AddTrackJob($stream->id, $this->video->id))->handle();
+    $this->run = fn (Stream $stream) => app()->call([new AddTrackJob($stream->id, $this->video->id), 'handle']);
 });
 
 /** ffmpeg writes its last quoted path; the packager writes the segments and its throwaway manifest. */
@@ -103,16 +105,27 @@ function fakeTrackBinaries($test): void
         $test->commands[] = $command;
 
         if (is_string($command) && str_starts_with($command, 'ffmpeg')) {
-            preg_match_all('/"([^"]+)"/', $command, $m);
-            $out = end($m[1]);
-            @mkdir(dirname($out), 0755, true);
-            file_put_contents($out, str_contains($command, 'webvtt') ? "WEBVTT\n\n00:00.000 --> 00:01.000\nBonjour\n" : 'encoded-audio');
+            // Every output of the (possibly multi-output) run: `-f <format> "<path>"`.
+            preg_match_all('/-f (\S+) "([^"]+)"/', $command, $m, PREG_SET_ORDER);
+            foreach ($m as [, $format, $out]) {
+                @mkdir(dirname($out), 0755, true);
+                file_put_contents($out, $format === 'webvtt' ? ($test->vtt ?? "WEBVTT\n\n00:00.000 --> 00:01.000\nBonjour\n") : 'encoded-audio');
+            }
 
+            return Process::result('ok');
+        }
+
+        if (fakeS5cmdSync($command)) {
             return Process::result('ok');
         }
 
         if ($test->packagerFails) {
             return Process::result(output: '', errorOutput: 'PACKAGER_FAILURE', exitCode: 1);
+        }
+
+        // Lets a test act at the moment the packager runs, between the encode and the publish.
+        if (isset($test->onPackage)) {
+            ($test->onPackage)();
         }
 
         $descriptor = collect($command)->first(fn ($arg) => str_starts_with((string) $arg, 'in='));
@@ -205,7 +218,7 @@ it('rejects audio that is more than 10% off', function () {
     $stream = ($this->placeholder)();
 
     $job = new AddTrackJob($stream->id, $this->video->id);
-    expect(fn () => $job->handle())->toThrow(RuntimeException::class, 'check it is the right file');
+    expect(fn () => app()->call([$job, 'handle']))->toThrow(RuntimeException::class, 'check it is the right file');
     $job->failed(new RuntimeException('Audio is 12.5s long but the video is 10s; check it is the right file.'));
 
     expect($stream->fresh()->status)->toBe(StreamStatus::FAILED)
@@ -236,7 +249,7 @@ it('leaves manifests untouched when the packager fails', function () {
     $stream = ($this->placeholder)();
 
     $job = new AddTrackJob($stream->id, $this->video->id);
-    expect(fn () => $job->handle())->toThrow(RuntimeException::class);
+    expect(fn () => app()->call([$job, 'handle']))->toThrow(RuntimeException::class);
     $job->failed(new RuntimeException('packager failed'));
 
     expect($stream->fresh()->status)->toBe(StreamStatus::FAILED)
@@ -249,7 +262,7 @@ it('stops when the video is no longer completed at publish time', function () {
     $this->video->update(['status' => 'running']);
 
     $job = new AddTrackJob($stream->id, $this->video->id);
-    expect(fn () => $job->handle())->toThrow(RuntimeException::class);
+    expect(fn () => app()->call([$job, 'handle']))->toThrow(RuntimeException::class);
     $job->failed(new RuntimeException('The video stopped being completed.'));
 
     expect($stream->fresh()->status)->toBe(StreamStatus::FAILED)
@@ -351,4 +364,108 @@ it('accepts audio whose duration the probe could not read', function () {
     ($this->run)($stream);
 
     expect($stream->fresh()->status)->toBe(StreamStatus::READY);
+});
+
+it('refuses a ladder name another audio track of the video already uses', function () {
+    // A source ladder named exactly as the dub's stereo rung would be.
+    $this->audio->update(['name' => 'English dub (Stereo)']);
+    $this->probe['channels'] = 6;
+    $stream = ($this->placeholder)();
+
+    $job = new AddTrackJob($stream->id, $this->video->id);
+    expect(fn () => app()->call([$job, 'handle']))->toThrow(RuntimeException::class, 'already named "English dub (Stereo)"');
+    $job->failed(new RuntimeException('Another audio track of this video is already named "English dub (Stereo)".'));
+
+    expect($stream->fresh()->status)->toBe(StreamStatus::FAILED);
+});
+
+it('fails every rung of a ladder together, keeping the rows and dropping the upload', function () {
+    $this->probe['channels'] = 6;
+    $this->packagerFails = true;
+    $stream = ($this->placeholder)();
+    $before = Storage::disk('s3')->get($this->hlsPath);
+
+    $job = new AddTrackJob($stream->id, $this->video->id);
+    expect(fn () => app()->call([$job, 'handle']))->toThrow(RuntimeException::class);
+    $job->failed(new RuntimeException('packager failed'));
+
+    $rungs = $this->video->streamsOfTrackUpload($stream->meta['track_upload']);
+
+    expect($rungs)->toHaveCount(2)
+        ->and($rungs->every(fn ($s) => $s->status === StreamStatus::FAILED && $s->error_log === 'packager failed'))->toBeTrue()
+        ->and(Storage::disk('s3')->exists($stream->meta['track_upload']))->toBeFalse()
+        ->and(Storage::disk('s3')->get($this->hlsPath))->toBe($before);
+
+    Queue::assertPushed(DispatchWebhookJob::class, fn ($job) => $job->payload['event'] === 'video.track_failed'
+        && count($job->payload['tracks']) === 2);
+});
+
+it('refuses to add a track to a video with no known duration', function () {
+    $this->video->update(['duration' => 0]);
+    $stream = ($this->placeholder)();
+
+    expect(fn () => ($this->run)($stream))->toThrow(RuntimeException::class, 'no known duration');
+});
+
+it('refuses a subtitle file with no cues', function () {
+    $this->vtt = "WEBVTT\n\n";
+    $stream = ($this->placeholder)('subtitle');
+
+    expect(fn () => ($this->run)($stream))->toThrow(RuntimeException::class, 'no cues');
+});
+
+it('stops quietly when the track is deleted while it is processed', function () {
+    $stream = ($this->placeholder)();
+    $before = Storage::disk('s3')->get($this->hlsPath);
+    $this->onPackage = fn () => DB::table('streams')->where('id', $stream->id)->delete();
+
+    ($this->run)($stream);
+
+    expect(Storage::disk('s3')->get($this->hlsPath))->toBe($before)
+        ->and(Storage::disk('s3')->allFiles($stream->segmentsPath($this->video)))->toBe([]);
+    Queue::assertNotPushed(DispatchWebhookJob::class, fn ($job) => str_starts_with($job->payload['event'], 'video.track_'));
+});
+
+it('counts the whole track in the variants when the group peak is unknown (VBR)', function () {
+    $this->audio->update(['input_params' => ['audio_codec' => 'aac', 'audio_vbr' => '4', 'channels' => '2']]);
+
+    ($this->run)(($this->placeholder)());
+
+    // The fake throwaway master declares 134000; the fixture variant 3050279.
+    expect(Storage::disk('s3')->get($this->hlsPath))->toContain('BANDWIDTH='.(3050279 + 134000).',');
+});
+
+it('leaves no local scratch behind', function () {
+    ($this->run)(($this->placeholder)());
+
+    expect(Storage::disk('local')->allFiles('add-track'))->toBe([]);
+});
+
+it('never publishes what a killed attempt left in the scratch dir', function () {
+    $stream = ($this->placeholder)();
+    $stale = Storage::disk('local')->path(AddTrackJob::SCRATCH_DIR."/{$stream->ulid}/package/01STALERUNG0000000000000000");
+    @mkdir($stale, 0755, true);
+    file_put_contents("{$stale}/1.m4s", 'stale');
+    file_put_contents(dirname($stale).'/_audio.mpd', 'stale throwaway');
+
+    ($this->run)($stream);
+
+    expect(Storage::disk('s3')->allFiles("{$this->video->playPrefix()}/01STALERUNG0000000000000000"))->toBe([])
+        ->and(Storage::disk('s3')->exists("{$this->video->playPrefix()}/_audio.mpd"))->toBeFalse()
+        ->and($stream->fresh()->status)->toBe(StreamStatus::READY);
+});
+
+it('fails a track whose job times out mid-publish, outside the transaction it dies in', function () {
+    $stream = ($this->placeholder)();
+
+    // The test's own transaction is level 1; the publish opened one more and is dying in it.
+    DB::beginTransaction();
+    (new ReflectionProperty(TrackPublisher::class, 'openTransactionLevel'))->setValue(null, DB::transactionLevel());
+    $stream->update(['name' => 'written inside the dying publish']);
+
+    (new AddTrackJob($stream->id, $this->video->id))->failed(new RuntimeException('timed out'));
+
+    expect(DB::transactionLevel())->toBe(1)
+        ->and($stream->fresh()->status)->toBe(StreamStatus::FAILED)
+        ->and($stream->fresh()->name)->toBe('English dub');
 });

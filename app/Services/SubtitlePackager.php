@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Console\Commands\RepairSubtitlesCommand;
 use App\Jobs\PackageVideoJob;
+use App\Models\Video;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
@@ -29,6 +30,12 @@ class SubtitlePackager
 
     public function __construct(private ManifestEditor $manifests) {}
 
+    /** Longer than the video, so each subtitle track is a single segment ({@see PackagerCommandBuilder::buildText}). */
+    public static function segmentDurationFor(Video $video): int
+    {
+        return (int) ceil((float) $video->duration) + 2;
+    }
+
     /**
      * Package `$subs` into `$dir` and graft them into every manifest sitting there. Subtitles are
      * non-critical: a format that cannot be packaged at all leaves its manifests untouched rather
@@ -44,11 +51,6 @@ class SubtitlePackager
             return;
         }
 
-        $builder = new PackagerCommandBuilder(
-            (string) config('packager.bin'),
-            (int) config('packager.segment_duration'),
-        );
-
         foreach (self::MANIFESTS as $format => $pattern) {
             $targets = glob("{$dir}/{$pattern}") ?: [];
 
@@ -56,7 +58,7 @@ class SubtitlePackager
                 continue;
             }
 
-            $packaged = $this->run($builder, $subs, $dir, $segmentDuration, $timeout, $format, $context, $heartbeat);
+            $packaged = $this->package($subs, $dir, $segmentDuration, $timeout, $format, $context, $heartbeat);
 
             foreach ($packaged === [] ? [] : $targets as $target) {
                 $this->graft($target, $format, $packaged);
@@ -65,8 +67,9 @@ class SubtitlePackager
     }
 
     /**
-     * Package one format and return each throwaway manifest's contents: one document for the joint
-     * run, or one per surviving track when that run failed.
+     * Package one format into `$dir` and return each throwaway manifest's contents: one document for
+     * the joint run, or one per surviving track when that run failed. Public for callers that graft
+     * the result themselves, under a lock ({@see AddTrackService}).
      *
      * Shaka fails the ENTIRE run over a single unparseable input, so one malformed track used to
      * strip every subtitle from the video — seven tracks lost over one stray blank line. Retrying
@@ -77,8 +80,10 @@ class SubtitlePackager
      * @param  (callable():void)|null  $heartbeat
      * @return list<string>
      */
-    private function run(PackagerCommandBuilder $builder, array $subs, string $dir, int $segmentDuration, int $timeout, string $format, array $context, ?callable $heartbeat): array
+    public function package(array $subs, string $dir, int $segmentDuration, int $timeout, string $format, array $context = [], ?callable $heartbeat = null): array
     {
+        $builder = PackagerCommandBuilder::fromConfig();
+
         if ($this->runOnce($builder, $subs, $dir, $segmentDuration, $timeout, $format, $context, $heartbeat)) {
             $manifest = $this->takeSubsManifest($dir, $format);
 

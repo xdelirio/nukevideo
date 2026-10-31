@@ -12,6 +12,7 @@ use Exception;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * Creates the video record the moment the upload webhook lands, so the user never loses
@@ -39,6 +40,15 @@ class OnVideoUploadedService
         }
 
         $meta = $this->uppyService->getUploadMeta($key);
+
+        // A late redelivery for an upload already consumed: an added track's key stops being its
+        // stream's path once published, and the object is gone with the metadata. Nothing to do,
+        // and nothing worth five failed attempts.
+        if (! $meta && ! Storage::disk('s3')->exists($key)) {
+            Log::info('Upload already consumed; skipping redelivery', ['key' => $key]);
+
+            return;
+        }
 
         if (! $meta) {
             throw new Exception("Upload metadata not found for key: {$key}");

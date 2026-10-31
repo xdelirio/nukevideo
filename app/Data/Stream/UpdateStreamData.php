@@ -6,6 +6,7 @@ use App\Data\RequestData;
 use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
+use App\Services\TrackIngestService;
 use Closure;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Attributes\Validation\Max;
@@ -15,6 +16,9 @@ use Symfony\Component\Intl\Languages;
 
 class UpdateStreamData extends RequestData
 {
+    /** Every writer of a track name holds it to this ({@see TrackIngestService}). */
+    public const NAME_PATTERN = '/^[^",\r\n]+\z/u';
+
     public function __construct(
         /**
          * A comma would break the shaka stream descriptor this is interpolated into, and a quote or
@@ -22,7 +26,7 @@ class UpdateStreamData extends RequestData
          * playlist is edited as text, so a newline here would inject arbitrary tags for every viewer
          * ({@see PackagerCommandBuilder}, {@see ManifestEditor}).
          */
-        #[Max(255), Regex('/^[^",\r\n]+\z/u')]
+        #[Max(255), Regex(self::NAME_PATTERN)]
         public string $name,
         public ?string $language,
         public bool $forced,

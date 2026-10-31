@@ -6,13 +6,10 @@ use App\Data\Stream\UpdateStreamData;
 use App\DTOs\TrackUploadMeta;
 use App\DTOs\UploadMeta;
 use App\Enums\VideoPriority;
-use App\Enums\VideoStatus;
 use App\Jobs\OnVideoUploaded;
 use App\Models\Project;
 use App\Models\Video;
-use App\Services\StreamManagementService;
 use App\Services\TrackIngestService;
-use App\Services\TrackParamsResolver;
 use App\Services\UppyS3Service;
 use Aws\S3\S3Client;
 use Illuminate\Http\Request;
@@ -32,17 +29,9 @@ class MyCustomUppyController extends Controller
 
     protected string $bucket;
 
-    /** What each kind of added track may be uploaded as. Audio takes any container ffmpeg reads an
-     *  audio stream from, video files included (the first audio stream is used). */
-    private const TRACK_EXTENSIONS = [
-        'audio' => ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mka', 'mp4', 'mkv', 'mov', 'webm', 'ac3', 'eac3'],
-        'subtitle' => ['srt', 'vtt', 'ass', 'ssa'],
-    ];
-
     public function __construct(
         protected UppyS3Service $uppyService,
-        private TrackParamsResolver $tracks,
-        private StreamManagementService $streams,
+        private TrackIngestService $trackIngest,
     ) {
         $this->client = Storage::disk('s3')->getClient();
         $this->bucket = config('filesystems.disks.s3.bucket');
@@ -268,11 +257,11 @@ class MyCustomUppyController extends Controller
         $request->validate([
             'filename' => 'required|string|max:255',
             'metadata.video' => 'required|ulid',
-            'metadata.trackType' => ['required', Rule::in(array_keys(self::TRACK_EXTENSIONS))],
+            'metadata.trackType' => ['required', Rule::in(array_keys(TrackIngestService::EXTENSIONS))],
             // Not `name`/`type`: Uppy fills those meta fields with the file's own name and MIME type.
-            // Same criteria as editing a track ({@see UpdateStreamData}): the name is written into
-            // the packager descriptor and the HLS master as plain text.
-            'metadata.trackName' => ['required', 'string', 'max:255', 'regex:/^[^",\r\n]+\z/u'],
+            // Same criteria as editing a track: the name is written into the packager descriptor and
+            // the HLS master as plain text.
+            'metadata.trackName' => ['required', 'string', 'max:'.TrackIngestService::MAX_NAME_LENGTH, 'regex:'.UpdateStreamData::NAME_PATTERN],
             'metadata.language' => ['required', ...UpdateStreamData::rules()['language']],
             'metadata.forced' => 'nullable|boolean',
             'metadata.hearingImpaired' => 'nullable|boolean',
@@ -281,28 +270,20 @@ class MyCustomUppyController extends Controller
         ]);
 
         $video = $project->videos()->where('ulid', $request->input('metadata.video'))->firstOrFail();
-        $type = $request->input('metadata.trackType');
-        $extension = strtolower(pathinfo((string) $request->input('filename'), PATHINFO_EXTENSION));
 
-        if ($video->status !== VideoStatus::COMPLETED->value) {
-            throw ValidationException::withMessages(['metadata.video' => 'Tracks can only be added to a video that finished processing.']);
-        }
-
-        if (! in_array($extension, self::TRACK_EXTENSIONS[$type], true)) {
-            throw ValidationException::withMessages(['filename' => 'A '.$type.' track must be one of: '.implode(', ', self::TRACK_EXTENSIONS[$type]).'.']);
-        }
-
-        if ($type === 'audio' && ! $this->tracks->canTakeAudio($video)) {
-            throw ValidationException::withMessages(['metadata.trackType' => 'None of this video\'s outputs carries audio in its template.']);
-        }
-
-        $this->streams->assertNameAvailable(
-            $video->id,
-            $type,
+        $refusal = $this->trackIngest->refusal(
+            $video,
+            $request->input('metadata.trackType'),
             $request->input('metadata.trackName'),
             $request->boolean('metadata.forced'),
-            field: 'metadata.trackName',
+            pathinfo((string) $request->input('filename'), PATHINFO_EXTENSION),
         );
+
+        if ($refusal !== null) {
+            $field = $refusal['field'] === 'filename' ? 'filename' : "metadata.{$refusal['field']}";
+
+            throw ValidationException::withMessages([$field => $refusal['message']]);
+        }
 
         return $video;
     }

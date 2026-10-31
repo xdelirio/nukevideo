@@ -5,10 +5,12 @@ namespace App\Models;
 use App\Enums\VideoStatus;
 use App\Jobs\PackageVideoJob;
 use App\Observers\OutputObserver;
+use App\Services\ChunkTranscodeService;
 use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
 use App\Services\VodLinkService;
+use App\Support\Bitrate;
 use Closure;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
@@ -185,6 +187,22 @@ class Output extends Model
     public function videoCodec(): ?string
     {
         return $this->codecFamily('video');
+    }
+
+    /**
+     * The nominal rate (bits/s) of the heaviest audio rendition this output serves: what its HLS
+     * variants' declared peak already counts. Null when one of them states no rate (VBR), so a
+     * caller cannot mistake "unknown" for "none" ({@see ManifestEditor::hlsAddAudio}).
+     */
+    public function nominalAudioPeakBps(): ?int
+    {
+        $rates = $this->streams->where('type', 'audio')
+            // No codec pinned is the fixed 128k default encode ({@see ChunkTranscodeService::buildAudioArguments}).
+            ->map(fn (Stream $stream) => data_get($stream->input_params, 'audio_codec') === null
+                ? 128_000
+                : Bitrate::toBps(data_get($stream->input_params, 'audio_bitrate')));
+
+        return $rates->contains(null) ? null : (int) $rates->max();
     }
 
     /** The decodable audio format this output serves (`aac`, `opus`), or null when it carries no

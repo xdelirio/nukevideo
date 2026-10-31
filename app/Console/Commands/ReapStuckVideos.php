@@ -2,8 +2,12 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\StreamStatus;
 use App\Enums\VideoStatus;
+use App\Jobs\AddTrackJob;
+use App\Models\Stream;
 use App\Models\Video;
+use App\Services\AddTrackService;
 use App\Services\NodeService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -32,8 +36,18 @@ class ReapStuckVideos extends Command
     /** Past this, queued work is not "waiting its turn" any more — nothing is going to deliver it. */
     private const ABANDONED_MINUTES = 720;
 
-    public function handle(): int
+    /**
+     * Past this an added track is not processing any more, whatever its row says: its job gives up
+     * after six hours of retries plus one last 30-minute run ({@see AddTrackJob::retryUntil}). What
+     * gets here lost its job — a worker on an image that predates it, a flushed queue, a `failed()`
+     * that itself died — and would otherwise stay locked against edits and deletes forever.
+     */
+    private const STUCK_TRACK_MINUTES = 420;
+
+    public function handle(AddTrackService $tracks): int
     {
+        $this->reapStuckTracks($tracks);
+
         $minutes = $this->staleMinutes();
         $threshold = now()->subMinutes($minutes);
 
@@ -71,6 +85,22 @@ class ReapStuckVideos extends Command
         $this->info("Reap complete: {$failed} failed, {$waiting} still queued.");
 
         return self::SUCCESS;
+    }
+
+    /** Fail the added tracks whose job is gone ({@see STUCK_TRACK_MINUTES}), one upload at a time. */
+    private function reapStuckTracks(AddTrackService $tracks): void
+    {
+        $stuck = Stream::with('video')
+            ->where('status', StreamStatus::PROCESSING->value)
+            ->where('updated_at', '<', now()->subMinutes(self::STUCK_TRACK_MINUTES))
+            ->get()
+            // Every rung of one upload fails together; the first of each is enough.
+            ->unique(fn (Stream $stream) => $stream->meta['track_upload'] ?? $stream->id);
+
+        foreach ($stuck as $stream) {
+            $tracks->fail($stream, 'Processing the track stopped without finishing; upload it again.');
+            $this->warn("Track {$stream->ulid} of video {$stream->video_id} failed (processing for over ".self::STUCK_TRACK_MINUTES.' minutes).');
+        }
     }
 
     /**

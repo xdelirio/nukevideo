@@ -141,7 +141,7 @@ of `metadata.template`:
 | `metadata.project` | string | **Required.** As for a video upload. |
 | `metadata.video` | string | **Required.** ULID of a `completed` video of that project. |
 | `metadata.trackType` | string | **Required.** `audio` or `subtitle`. Not `type`: Uppy fills that field with the file's MIME type. |
-| `metadata.trackName` | string | **Required.** Same rules as `name` in [Update Stream](#update-stream): unique among the video's tracks of that type, no `,`, `"` or line break. Not `name`, for the same reason as above. |
+| `metadata.trackName` | string | **Required.** Up to 240 characters — room for the layout suffix a ladder adds. Same rules as `name` in [Update Stream](#update-stream): unique among the video's tracks of that type, no `,`, `"` or line break. Not `name`, for the same reason as above. |
 | `metadata.language` | string | **Required.** BCP-47, as in [Update Stream](#update-stream). |
 | `metadata.forced` | boolean | Optional, subtitles only. |
 | `metadata.hearingImpaired` | boolean | Optional. SDH subtitles, or a dialogue-enhanced audio mix. |
@@ -155,16 +155,20 @@ template. A video of another project is a `404`.
 
 Once the upload completes, the track shows up in the video's `streams` with `status: "processing"`,
 and moves to `ready` (or `failed`, with the reason in `errorLog`) on its own. Your webhook gets
-[`video.track_ready` or `video.track_failed`](/api/webhooks#events).
+[`video.track_ready` or `video.track_failed`](/api/webhooks#events) either way — including when the
+upload is refused as it lands (the video was retried meanwhile, or the name was taken). The
+uploaded file is deleted once the track is ready or has failed; a failed track never retries, so
+upload it again. A track whose processing stops without an outcome — say, a lost worker — is
+failed automatically after about seven hours.
 
 **How the track is encoded:**
 
 - **Audio** is encoded the way the video's template encodes audio, output by output: same codec,
   same channel ladder, same bitrate cap. A 5.1 file under a template with a stereo and a 5.1 rung
   therefore becomes **two** streams, named with a `(Stereo)` / `(5.1)` suffix; they succeed or fail
-  together. If the template now names a different codec than the one an output was encoded with,
-  the output's own audio settings are used instead, so a player never meets two codecs in one
-  audio group. An Opus track is only added to DASH manifests, as at ingest.
+  together, and the suffixed names must be free too. The settings are those of the template
+  **version** the video was encoded with: editing the template since changes nothing for it. An
+  Opus track is only added to DASH manifests, as at ingest.
 - **Audio is fitted to the video's duration**: padded with silence when shorter, cut when longer.
   A file more than **10%** longer or shorter than the video is refused (`failed`) as almost
   certainly the wrong file. Timing is taken as is from `0`; there is no offset.
@@ -188,8 +192,8 @@ DELETE /api/streams/{ulid}
 Responds `400` while the video is still processing, `409` while the track itself is still being
 [added](#add-a-track), and `400` when the track is the last video
 rendition of any output — that would leave the output's published manifests with no video at all.
-Deleting a track does **not** notify your webhook, so a mirrored copy of the video has to be
-refreshed from the response or from [Get Video](/api/videos#get-video).
+Deleting a track notifies your webhook with [`video.updated`](/api/webhooks#events), carrying the
+video without it.
 
 ## Stream Types
 

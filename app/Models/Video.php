@@ -10,8 +10,10 @@ use App\Jobs\Concerns\CompletesVideo;
 use App\Jobs\PrepareVideoJob;
 use App\Jobs\PruneScratchJob;
 use App\Observers\VideoObserver;
+use App\Services\AddTrackService;
 use App\Services\WebhookDispatcher;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -314,6 +316,20 @@ class Video extends Model
     public function template(): BelongsTo
     {
         return $this->belongsTo(Template::class);
+    }
+
+    /**
+     * Every stream one track upload became ({@see AddTrackService}): a 5.1 dub can
+     * be several rungs, which share the upload key in `meta.track_upload`. Filtered in PHP — the
+     * schema runs on SQLite too, so no JSON path queries — over a video's handful of streams.
+     *
+     * @return Collection<int, Stream>
+     */
+    public function streamsOfTrackUpload(string $key): Collection
+    {
+        return $this->streams()->whereIn('type', ['audio', 'subtitle'])->get()
+            ->filter(fn (Stream $stream) => ($stream->meta['track_upload'] ?? null) === $key)
+            ->values();
     }
 
     /** The immutable encoding definition this video was ingested with ({@see TemplateVersion}). */

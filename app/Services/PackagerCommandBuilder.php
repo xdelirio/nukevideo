@@ -33,6 +33,12 @@ class PackagerCommandBuilder
         private int $segmentDuration,
     ) {}
 
+    /** The builder every packager run uses: the configured binary and segment duration. */
+    public static function fromConfig(): self
+    {
+        return new self((string) config('packager.bin'), (int) config('packager.segment_duration'));
+    }
+
     /**
      * Build one packager run. `$cap` names the manifest set: null is the full master, a height
      * (e.g. 720) yields a capped manifest listing only the renditions passed in. Every run writes

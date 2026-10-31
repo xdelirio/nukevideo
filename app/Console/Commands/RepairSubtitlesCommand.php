@@ -136,7 +136,7 @@ class RepairSubtitlesCommand extends Command
             $packager->packageAndGraft(
                 $subs,
                 $workDir,
-                (int) ceil((float) $video->duration) + 2,
+                SubtitlePackager::segmentDurationFor($video),
                 600,
                 ['video' => $video->id],
             );

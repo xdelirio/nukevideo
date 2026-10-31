@@ -5,7 +5,6 @@ use App\Jobs\AddTrackJob;
 use App\Models\Video;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -46,10 +45,13 @@ return new class extends Migration
             });
         }
 
+        // An index, not a foreign key: on MariaDB adding a foreign key to a populated table copies
+        // it with writes blocked, and `videos` is written by every worker all the time. Nothing
+        // needs the constraint — a version is never deleted while a video uses it: its template
+        // cannot be deleted then, and a project deletes its videos before its templates.
         if (! Schema::hasColumn('videos', 'template_version_id')) {
             Schema::table('videos', function (Blueprint $table) {
-                $table->foreignId('template_version_id')->nullable()->after('template_id')
-                    ->constrained('template_versions')->nullOnDelete();
+                $table->unsignedBigInteger('template_version_id')->nullable()->after('template_id')->index();
             });
         }
     }
@@ -58,10 +60,7 @@ return new class extends Migration
     {
         if (Schema::hasColumn('videos', 'template_version_id')) {
             Schema::table('videos', function (Blueprint $table) {
-                // SQLite rebuilds the table on dropColumn and has no named foreign key to drop.
-                if (DB::getDriverName() !== 'sqlite') {
-                    $table->dropForeign(['template_version_id']);
-                }
+                $table->dropIndex(['template_version_id']);
                 $table->dropColumn('template_version_id');
             });
         }

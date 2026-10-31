@@ -10,6 +10,7 @@
 use App\DTOs\TrackUploadMeta;
 use App\Enums\StreamStatus;
 use App\Jobs\AddTrackJob;
+use App\Jobs\DispatchWebhookJob;
 use App\Jobs\OnVideoUploaded;
 use App\Jobs\PruneScratchJob;
 use App\Models\Output;
@@ -18,6 +19,7 @@ use App\Models\Stream;
 use App\Models\User;
 use App\Models\Video;
 use App\Services\ApiTokenService;
+use App\Services\OnVideoUploadedService;
 use App\Services\TrackIngestService;
 use App\Services\UppyS3Service;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -174,14 +176,20 @@ it('creates a processing placeholder and dispatches AddTrackJob', function () {
 
 it('creates a failed row when the video stopped being completed before ingest', function () {
     Queue::fake();
+    Storage::fake('s3');
+    $this->project->update(['settings' => ['webhookUrl' => 'https://example.test/hook']]);
     $key = 'tmp-videos/'.Str::ulid().'.wav';
     cacheTrackMeta($this, $key);
+    Storage::disk('s3')->put($key, 'audio');
     $this->video->update(['status' => 'running']);
 
     app(TrackIngestService::class)->handle($key, 1234);
 
-    expect(Stream::where('path', $key)->first()->status)->toBe(StreamStatus::FAILED);
+    expect(Stream::where('path', $key)->first()->status)->toBe(StreamStatus::FAILED)
+        // Nothing will ever read it, and the row says why.
+        ->and(Storage::disk('s3')->exists($key))->toBeFalse();
     Queue::assertNotPushed(AddTrackJob::class);
+    Queue::assertPushed(DispatchWebhookJob::class, fn ($job) => $job->payload['event'] === 'video.track_failed');
 });
 
 it('replays a lost track webhook, which ingests it as a track', function () {
@@ -207,4 +215,35 @@ it('prunes orphaned track uploads after the grace window', function () {
     app(PruneScratchJob::class)->handle(app(UppyS3Service::class));
 
     expect(Storage::disk('s3')->exists($old))->toBeFalse();
+});
+
+it('ignores a webhook redelivered after the upload was consumed', function () {
+    Storage::fake('s3');
+    $key = 'tmp-videos/'.Str::ulid().'.wav';
+
+    // No metadata and no object: an added track already published, its source deleted.
+    app(OnVideoUploadedService::class)->handle($key, 10);
+
+    expect(Stream::where('path', $key)->exists())->toBeFalse();
+});
+
+it('rejects a name with no room left for a ladder suffix', function () {
+    $this->getJson(($this->params)(['trackName' => str_repeat('a', 241)]))
+        ->assertStatus(422)->assertJsonValidationErrors('metadata.trackName');
+});
+
+it('sweeps the scratch an added track run left behind once it is past any run', function () {
+    Storage::fake('local');
+    Storage::fake('s3');
+    Storage::fake('chunks');
+    Queue::fake();
+    $disk = Storage::disk('local');
+    $disk->put(AddTrackJob::SCRATCH_DIR.'/old/package/1.m4s', 'x');
+    $disk->put(AddTrackJob::SCRATCH_DIR.'/fresh/package/1.m4s', 'x');
+    touch($disk->path(AddTrackJob::SCRATCH_DIR.'/old'), now()->subHours(2)->getTimestamp());
+
+    app(PruneScratchJob::class)->handle(app(UppyS3Service::class));
+
+    expect($disk->exists(AddTrackJob::SCRATCH_DIR.'/old'))->toBeFalse()
+        ->and($disk->exists(AddTrackJob::SCRATCH_DIR.'/fresh/package/1.m4s'))->toBeTrue();
 });
