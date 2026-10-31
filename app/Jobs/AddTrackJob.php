@@ -16,6 +16,7 @@ use App\Support\Scratch;
 use DateTimeInterface;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\MaxAttemptsExceededException;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
@@ -132,17 +133,28 @@ class AddTrackJob implements ShouldQueue
         // The upload has become the stream's own files; nothing reads it again.
         Storage::disk('s3')->delete($upload);
 
-        WebhookDispatcher::forVideo('video.track_ready', $video->fresh(), [
-            'tracks' => $video->streamsOfTrackUpload($upload)->pluck('ulid')->all(),
-        ]);
+        // Gone if the video was deleted in the instant since: nothing left to announce.
+        if ($fresh = $video->fresh()) {
+            WebhookDispatcher::forVideo('video.track_ready', $fresh, [
+                'tracks' => $video->streamsOfTrackUpload($upload)->pluck('ulid')->all(),
+            ]);
+        }
     }
 
     public function failed(Throwable $e): void
     {
         $placeholder = Stream::with('video')->find($this->streamId);
 
-        if ($placeholder) {
-            app(AddTrackService::class)->fail($placeholder, $e->getMessage());
+        if (! $placeholder) {
+            return;
         }
+
+        // The queue's own wording ("…has been attempted too many times") means nothing to the
+        // person who uploaded the file.
+        $reason = $e instanceof MaxAttemptsExceededException
+            ? 'The track waited too long behind other work on this video; upload it again.'
+            : $e->getMessage();
+
+        app(AddTrackService::class)->fail($placeholder, $reason);
     }
 }

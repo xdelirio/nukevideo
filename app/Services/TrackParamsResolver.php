@@ -57,7 +57,10 @@ class TrackParamsResolver
     /** @return array<int, array<string, mixed>> */
     private function rungsFor(Video $video, Output $output, int $sourceChannels, ?string $sourceCodec, ?string $sourceProfile, ?int $sourceRate): array
     {
-        $config = $video->encodingQuery()['outputs'][$output->template_index ?? -1]['audio'] ?? null;
+        // An output from before the index was recorded, not backfilled yet: its position among the
+        // video's outputs, which is the order ingest creates them in.
+        $index = $output->template_index ?? $video->outputs->sortBy('id')->values()->search(fn ($o) => $o->is($output));
+        $config = $video->encodingQuery()['outputs'][$index === false ? -1 : $index]['audio'] ?? null;
         $existing = $output->streams->where('type', 'audio');
 
         $templateFamily = $config ? self::family($config['audio_codec'] ?? 'aac') : null;

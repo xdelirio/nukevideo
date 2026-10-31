@@ -4,6 +4,7 @@ namespace App\Jobs\Concerns;
 
 use App\Models\Video;
 use App\Services\Concerns\EmitsHeartbeat;
+use App\Services\ManifestEditor;
 use Illuminate\Support\Facades\Process;
 use RuntimeException;
 
@@ -44,6 +45,8 @@ trait SyncsViaS5cmd
         foreach (self::SYNC_CONTENT_TYPES as $ext => $contentType) {
             $this->s5cmdSync($disk, $source, $dest, $video, $timeout, [
                 '--include', "*.{$ext}", '--content-type', $contentType,
+                // Manifests are edited in place later; segments never change under their key.
+                ...(in_array($ext, ['mpd', 'm3u8'], true) ? ['--cache-control', ManifestEditor::MANIFEST_CACHE_CONTROL] : []),
             ]);
         }
 

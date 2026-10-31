@@ -81,15 +81,33 @@ it('encodes a video with no version yet with its template, as before the backfil
         ->and($video->encodingDefinition())->toBeInstanceOf(Template::class);
 });
 
-it('gives a template without a version one on its next encoding change', function () {
+it('keeps the original encoding as version 1 when a template without versions is edited', function () {
     // As a template created before versions stands until the backfill runs.
     DB::table('template_versions')->delete();
     DB::table('templates')->update(['current_version_id' => null]);
 
     $this->template->fresh()->update(['query' => ['outputs' => [OPUS_OUTPUT]]]);
+    $template = $this->template->fresh();
 
-    expect($this->template->fresh()->currentVersion->version)->toBe(1)
-        ->and($this->template->fresh()->currentVersion->query)->toBe(['outputs' => [OPUS_OUTPUT]]);
+    // What its existing videos were encoded with is not lost to the edit.
+    expect($template->versions()->orderBy('version')->pluck('query')->all())->toBe([['outputs' => [AAC_OUTPUT]], ['outputs' => [OPUS_OUTPUT]]])
+        ->and($template->currentVersion->version)->toBe(2);
+});
+
+it('cuts a version at ingest for a template that has none yet', function () {
+    Queue::fake();
+    DB::table('template_versions')->delete();
+    DB::table('templates')->update(['current_version_id' => null]);
+    $key = 'tmp-videos/'.Str::ulid().'.mp4';
+    app(UppyS3Service::class)->storeUploadMeta($key, new UploadMeta(
+        user: $this->user->ulid, project: $this->project->ulid, template: $this->template->ulid, filename: 'clip.mp4',
+    ));
+
+    app(OnVideoUploadedService::class)->handle($key, 1024);
+
+    $video = Video::firstOrFail();
+    expect($video->template_version_id)->not->toBeNull()
+        ->and($video->templateVersion->query)->toBe(['outputs' => [AAC_OUTPUT]]);
 });
 
 it('pins the current version on a video at ingest', function () {

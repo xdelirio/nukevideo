@@ -42,8 +42,14 @@ class TrackIngestService
     {
         // Idempotency first, as in {@see OnVideoUploadedService::handle}: a redelivery lands after
         // the first run already forgot the metadata.
-        if (Stream::where('path', $key)->exists()) {
+        if ($existing = Stream::where('path', $key)->first()) {
             $this->uploads->forgetUploadMeta($key);
+
+            // A first run that died between creating the row and dispatching left it processing
+            // with no job behind it. Dispatching again is safe: the job exits on anything else.
+            if ($existing->status === StreamStatus::PROCESSING) {
+                AddTrackJob::dispatch($existing->id, $existing->video_id);
+            }
 
             return;
         }

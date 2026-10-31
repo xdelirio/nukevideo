@@ -254,6 +254,17 @@ class MyCustomUppyController extends Controller
      */
     private function validateTrackMetadata(Request $request, Project $project): Video
     {
+        // @uppy/aws-s3 sends every metadata value through String(), so the panel's flags arrive as
+        // "true"/"false" — which the `boolean` rule refuses. Normalised first; anything else is
+        // left as sent, for the rule to judge.
+        $metadata = (array) $request->input('metadata', []);
+        foreach (['forced', 'hearingImpaired', 'visualImpaired'] as $flag) {
+            if (is_string($metadata[$flag] ?? null)) {
+                $metadata[$flag] = filter_var($metadata[$flag], FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? $metadata[$flag];
+            }
+        }
+        $request->merge(['metadata' => $metadata]);
+
         $request->validate([
             'filename' => 'required|string|max:255',
             'metadata.video' => 'required|ulid',

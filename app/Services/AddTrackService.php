@@ -30,9 +30,18 @@ use Throwable;
  */
 class AddTrackService
 {
-    /** Within this a dub is the right file with a different tail; past it, it is almost certainly
-     *  another cut or another video altogether. */
-    private const MAX_DURATION_DRIFT = 0.10;
+    /**
+     * How far an audio file may run from the video's length and still be the right file: a dub
+     * with a slightly different tail is fitted (padded or cut), anything further is almost certainly
+     * another cut. Relative for long videos, with a floor so a short clip is not refused over the
+     * fraction of a second an encoder's priming adds. 1% of a two-hour film is 72 seconds.
+     */
+    private const MAX_DURATION_DRIFT = 0.01;
+
+    private const MIN_DURATION_DRIFT_SECONDS = 2.0;
+
+    /** A subtitle file is text; anything near this is not one, whatever its extension says. */
+    private const MAX_SUBTITLE_BYTES = 20 * 1024 * 1024;
 
     public function __construct(
         private TrackParamsResolver $params,
@@ -54,7 +63,9 @@ class AddTrackService
             throw new RuntimeException('The video has no known duration to fit the track to.');
         }
 
-        $source = Storage::disk('s3')->temporaryUrl($placeholder->meta['track_upload'], now()->addSeconds($timeout + 600));
+        $source = $placeholder->type === 'subtitle'
+            ? $this->localSubtitle($placeholder, $scratch)
+            : Storage::disk('s3')->temporaryUrl($placeholder->meta['track_upload'], now()->addSeconds($timeout + 600));
         $probe = app(TrackProbe::class)->probe($source, $placeholder->type);
 
         if ($probe === null) {
@@ -106,7 +117,7 @@ class AddTrackService
                     // A ladder renamed the rows "Dub (Stereo)", "Dub (5.1)"; the user named it "Dub".
                     'name' => count($failed) > 1 ? $stream->name : ($stream->meta['track_name'] ?? $stream->name),
                     'status' => StreamStatus::FAILED,
-                    'error_log' => Video::trimReason($reason),
+                    'error_log' => Video::trimReason(self::redact($reason)),
                 ]);
             }
         });
@@ -117,9 +128,12 @@ class AddTrackService
             Log::warning('Could not delete a failed track upload', ['key' => $upload, 'error' => $e->getMessage()]);
         }
 
-        Log::warning('Adding a track failed', ['video' => $video->id, 'upload' => $upload, 'error' => $reason]);
+        Log::warning('Adding a track failed', ['video' => $video->id, 'upload' => $upload, 'error' => self::redact($reason)]);
 
-        WebhookDispatcher::forVideo('video.track_failed', $video->fresh(), ['tracks' => $failed->pluck('ulid')->values()->all()]);
+        // Gone if the video was deleted meanwhile: nothing left to announce.
+        if ($fresh = $video->fresh()) {
+            WebhookDispatcher::forVideo('video.track_failed', $fresh, ['tracks' => $failed->pluck('ulid')->values()->all()]);
+        }
     }
 
     /**
@@ -131,9 +145,13 @@ class AddTrackService
         $duration = (float) $video->duration;
         $actual = (float) ($probe['duration'] ?? 0);
 
-        // A source whose length cannot be read (a raw ADTS stream states none) is fitted anyway:
-        // refusing it as "0s long" would blame the user for the probe's blind spot.
-        if ($actual > 0 && abs($actual - $duration) / $duration > self::MAX_DURATION_DRIFT) {
+        // Fitting is padding with silence or cutting: done to a file of unknown length, it could
+        // hide a missing half hour. ffprobe estimates even a raw ADTS stream, so this is rare.
+        if ($actual <= 0) {
+            throw new RuntimeException('Could not read how long the audio file is; export it in a container (m4a, wav, mka) and upload it again.');
+        }
+
+        if (abs($actual - $duration) > max(self::MIN_DURATION_DRIFT_SECONDS, $duration * self::MAX_DURATION_DRIFT)) {
             throw new RuntimeException(sprintf(
                 'Audio is %ss long but the video is %ss; check it is the right file.',
                 round($actual, 1),
@@ -155,6 +173,9 @@ class AddTrackService
         $builder = PackagerCommandBuilder::fromConfig();
         $tracks = [];
         $edits = [];
+        // Per manifest, the heaviest audio rendition its variants already count: the output's own,
+        // then each rung grafted before — two rungs of one ladder never play together.
+        $peaks = [];
 
         foreach ($streams as $i => $stream) {
             $packaged = [];
@@ -176,17 +197,29 @@ class AddTrackService
             }
 
             foreach ($sets[$i]['outputs'] as ['output' => $output, 'formats' => $formats]) {
-                // A rate-less (VBR) group's peak is unknown: count the whole track rather than
-                // understate what the variants need.
-                $peak = $output->nominalAudioPeakBps() ?? 0;
-
                 foreach ($this->editor->existingManifests($video, $output) as $manifest) {
-                    if (in_array($manifest['format'], $formats, true)) {
-                        $throwaway = $packaged[$manifest['format']];
-                        $edits[$manifest['path']][] = $manifest['format'] === 'hls'
-                            ? fn (string $master) => $this->editor->hlsAddAudio($master, $throwaway, $peak)
-                            : fn (string $master) => $this->editor->importDashAudio($master, $throwaway);
+                    if (! in_array($manifest['format'], $formats, true)) {
+                        continue;
                     }
+
+                    $path = $manifest['path'];
+                    $throwaway = $packaged[$manifest['format']];
+
+                    if ($manifest['format'] === 'dash') {
+                        $edits[$path][] = fn (string $master) => $this->editor->importDashAudio($master, $throwaway);
+
+                        continue;
+                    }
+
+                    // A rate-less (VBR) group's peak is unknown: count the whole track rather than
+                    // understate what the variants need.
+                    $peaks[$path] ??= $output->nominalAudioPeakBps() ?? 0;
+                    $edits[$path][] = function (string $master) use (&$peaks, $path, $throwaway) {
+                        $grafted = $this->editor->hlsAddAudio($master, $throwaway, $peaks[$path]);
+                        $peaks[$path] = max($peaks[$path], $this->editor->hlsTrackBandwidth($throwaway));
+
+                        return $grafted;
+                    };
                 }
             }
 
@@ -311,6 +344,20 @@ class AddTrackService
             throw new RuntimeException('The subtitle file has no cues.');
         }
 
+        // Cues that all start after the picture ends are a track no viewer ever sees: a file timed
+        // for another cut, or with an offset.
+        if (self::firstCueStart($vtt) >= (float) $video->duration) {
+            throw new RuntimeException('Every cue of the subtitle file starts after the video ends; check its timing.');
+        }
+
+        // Rechecked now, not only at upload: the ingest of another track with this name may have
+        // landed since, and two renditions of one NAME in the HLS subtitle group are invalid.
+        try {
+            $this->streams->assertNameAvailable($video->id, 'subtitle', $stream->name, (bool) $stream->forced, $stream->id);
+        } catch (ValidationException) {
+            throw new RuntimeException("Another subtitle track of this video is already named \"{$stream->name}\".");
+        }
+
         file_put_contents($raw, $vtt);
 
         $input = [
@@ -363,16 +410,68 @@ class AddTrackService
         ]], 'edits' => $edits];
     }
 
+    /**
+     * Copy a subtitle upload next to the job, as UTF-8. ffmpeg refuses anything else outright
+     * ("Invalid UTF-8 in decoded subtitles text"), and Latin-1 / Windows-1252 is what most Spanish
+     * and Portuguese subtitle files still come in. Subtitles are a few hundred KB, so reading the
+     * whole file is cheaper than any guessing from a sample.
+     */
+    private function localSubtitle(Stream $placeholder, string $scratch): string
+    {
+        $key = $placeholder->meta['track_upload'];
+        $disk = Storage::disk('s3');
+
+        if ((int) $disk->size($key) > self::MAX_SUBTITLE_BYTES) {
+            throw new RuntimeException('The subtitle file is too large to be a subtitle file.');
+        }
+
+        $text = (string) $disk->get($key);
+
+        // UTF-16 announces itself with a byte-order mark; anything else that is not UTF-8 is
+        // taken as Windows-1252, the superset of Latin-1 every legacy editor wrote.
+        $text = match (true) {
+            str_starts_with($text, "\xFF\xFE") => mb_convert_encoding(substr($text, 2), 'UTF-8', 'UTF-16LE'),
+            str_starts_with($text, "\xFE\xFF") => mb_convert_encoding(substr($text, 2), 'UTF-8', 'UTF-16BE'),
+            mb_check_encoding($text, 'UTF-8') => $text,
+            default => mb_convert_encoding($text, 'UTF-8', 'Windows-1252'),
+        };
+
+        $path = "{$scratch}/raw/source.".strtolower(pathinfo($key, PATHINFO_EXTENSION));
+        file_put_contents($path, $text);
+
+        return $path;
+    }
+
+    /** Start (seconds) of the earliest cue of a WebVTT document; INF when it has none. */
+    private static function firstCueStart(string $vtt): float
+    {
+        preg_match_all('/^(?:(\d+):)?(\d{1,2}):(\d{2})\.(\d{3})\s+-->/m', $vtt, $cues, PREG_SET_ORDER);
+
+        return collect($cues)
+            ->map(fn (array $c) => (int) $c[1] * 3600 + (int) $c[2] * 60 + (int) $c[3] + (int) $c[4] / 1000)
+            ->min() ?? INF;
+    }
+
     /** @param  string|list<string>  $command */
     private function run(string|array $command, int $timeout): void
     {
         $result = Process::timeout($timeout)->run($command);
 
         if (! $result->successful()) {
-            Log::warning('Added track command failed', ['error' => $result->errorOutput()]);
+            $error = self::redact(trim($result->errorOutput()));
+            Log::warning('Added track command failed', ['error' => $error]);
 
-            throw new RuntimeException('Processing the track failed: '.Str::limit(trim($result->errorOutput()), 500));
+            throw new RuntimeException('Processing the track failed: '.Str::limit($error, 500));
         }
+    }
+
+    /**
+     * Strip URLs out of a message bound for `error_log`, which the API returns to whoever holds a
+     * project key: a presigned upload URL names the internal S3 endpoint and the access key id.
+     */
+    private static function redact(string $message): string
+    {
+        return (string) preg_replace('#[a-z][a-z0-9+.-]*://\S+#i', '<upload>', $message);
     }
 
     /** Read a throwaway manifest and remove it, so the next run in the same dir cannot reread it. */

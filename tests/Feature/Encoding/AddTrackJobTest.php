@@ -18,6 +18,7 @@ use App\Services\TrackIngestService;
 use App\Services\TrackPublisher;
 use App\Support\TrackProbe;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Queue\MaxAttemptsExceededException;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
@@ -77,6 +78,7 @@ beforeEach(function () {
 
     $this->commands = new ArrayObject;
     $this->packagerFails = false;
+    $this->sources = [];
     fakeTrackBinaries($this);
 
     /** A placeholder exactly as {@see TrackIngestService} leaves it. */
@@ -106,6 +108,10 @@ function fakeTrackBinaries($test): void
 
         if (is_string($command) && str_starts_with($command, 'ffmpeg')) {
             // Every output of the (possibly multi-output) run: `-f <format> "<path>"`.
+            if (preg_match('/-i "([^"]+)"/', $command, $in) && is_file($in[1])) {
+                $test->sources[$in[1]] = file_get_contents($in[1]);
+            }
+
             preg_match_all('/-f (\S+) "([^"]+)"/', $command, $m, PREG_SET_ORDER);
             foreach ($m as [, $format, $out]) {
                 @mkdir(dirname($out), 0755, true);
@@ -357,15 +363,12 @@ it('leaves a published track alone when failed() fires after it went ready', fun
         ->and(Storage::disk('s3')->get($this->hlsPath))->toBe($hls);
 });
 
-it('accepts audio whose duration the probe could not read', function () {
+it('refuses audio whose duration cannot be read rather than fit it blind', function () {
     $this->probe['duration'] = null;
     $stream = ($this->placeholder)();
 
-    ($this->run)($stream);
-
-    expect($stream->fresh()->status)->toBe(StreamStatus::READY);
+    expect(fn () => ($this->run)($stream))->toThrow(RuntimeException::class, 'Could not read how long');
 });
-
 it('refuses a ladder name another audio track of the video already uses', function () {
     // A source ladder named exactly as the dub's stereo rung would be.
     $this->audio->update(['name' => 'English dub (Stereo)']);
@@ -468,4 +471,78 @@ it('fails a track whose job times out mid-publish, outside the transaction it di
     expect(DB::transactionLevel())->toBe(1)
         ->and($stream->fresh()->status)->toBe(StreamStatus::FAILED)
         ->and($stream->fresh()->name)->toBe('English dub');
+});
+
+it('accepts a dub within two seconds of the video, and refuses one further off on a short video', function () {
+    $this->probe['duration'] = 11.9;
+    ($this->run)($ok = ($this->placeholder)());
+    expect($ok->fresh()->status)->toBe(StreamStatus::READY);
+
+    $this->probe['duration'] = 12.5;
+    $off = ($this->placeholder)(meta: ['track_name' => 'Late dub']);
+    $off->update(['name' => 'Late dub', 'meta' => [...$off->meta, 'track_name' => 'Late dub']]);
+    expect(fn () => ($this->run)($off))->toThrow(RuntimeException::class, 'check it is the right file');
+});
+
+it('converts a Windows-1252 subtitle file to UTF-8 before ffmpeg reads it', function () {
+    $stream = ($this->placeholder)('subtitle');
+    Storage::disk('s3')->put($stream->meta['track_upload'], mb_convert_encoding("1\n00:00:01,000 --> 00:00:02,000\nCanción\n", 'Windows-1252', 'UTF-8'));
+
+    ($this->run)($stream);
+
+    $ffmpeg = collect($this->commands)->first(fn ($c) => is_string($c) && str_contains($c, 'webvtt'));
+    preg_match('/-i "([^"]+)"/', $ffmpeg, $m);
+
+    expect($m[1])->toEndWith('/raw/source.srt')
+        ->and($this->sources[$m[1]] ?? null)->toContain('Canción');
+});
+
+it('reads a UTF-16 subtitle file by its byte-order mark', function () {
+    $stream = ($this->placeholder)('subtitle');
+    Storage::disk('s3')->put($stream->meta['track_upload'], "\xFF\xFE".mb_convert_encoding("1\n00:00:01,000 --> 00:00:02,000\nNiño\n", 'UTF-16LE', 'UTF-8'));
+
+    ($this->run)($stream);
+
+    expect(collect($this->sources)->first())->toContain('Niño');
+});
+
+it('refuses a subtitle whose cues all start after the video ends', function () {
+    $this->vtt = "WEBVTT\n\n00:00:15.000 --> 00:00:16.000\nToo late\n";
+
+    expect(fn () => ($this->run)(($this->placeholder)('subtitle')))->toThrow(RuntimeException::class, 'after the video ends');
+});
+
+it('rechecks a subtitle name taken while the upload was in flight', function () {
+    $stream = ($this->placeholder)('subtitle');
+    $this->video->streams()->create(['path' => 'x/subtitle/other.vtt', 'type' => 'subtitle', 'name' => 'francais', 'language' => 'fr', 'meta' => []]);
+
+    expect(fn () => ($this->run)($stream))->toThrow(RuntimeException::class, 'already named');
+});
+
+it('raises a silent master once for a whole ladder, by its heaviest rung', function () {
+    $this->probe['channels'] = 6;
+    $this->output->streams()->detach($this->audio->id);
+    $silent = implode("\n", array_filter(preg_split('/\R/', Storage::disk('s3')->get($this->hlsPath)), fn ($l) => ! str_contains($l, 'TYPE=AUDIO')));
+    Storage::disk('s3')->put($this->hlsPath, str_replace([',AUDIO="audio"', ',mp4a.40.2'], '', $silent));
+
+    ($this->run)(($this->placeholder)());
+
+    // Both fake rungs declare 134000: only one plays at a time, so the variant gains it once.
+    expect(Storage::disk('s3')->get($this->hlsPath))->toContain('BANDWIDTH='.(3050279 + 134000).',');
+});
+
+it('keeps signed URLs out of the error a failed track reports', function () {
+    $stream = ($this->placeholder)();
+
+    (new AddTrackJob($stream->id, $this->video->id))->failed(new RuntimeException('Unable to probe https://s3.internal/bucket/x.wav?X-Amz-Credential=AKIA123&X-Amz-Signature=abc'));
+
+    expect($stream->fresh()->error_log)->toBe('Unable to probe <upload>');
+});
+
+it('explains a track that waited too long in plain words', function () {
+    $stream = ($this->placeholder)();
+
+    (new AddTrackJob($stream->id, $this->video->id))->failed(new MaxAttemptsExceededException('App\\Jobs\\AddTrackJob has been attempted too many times.'));
+
+    expect($stream->fresh()->error_log)->toContain('waited too long');
 });

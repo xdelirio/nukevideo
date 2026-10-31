@@ -150,3 +150,14 @@ it('reads the template version the video was encoded with, not the template as e
     expect($entries[0]['params']['audio_codec'])->toBe('aac')
         ->and($entries[0]['formats'])->toBe(['hls', 'dash']);
 });
+
+it('finds an output without a recorded index by its position among the video outputs', function () {
+    $outputs = ($this->withOutputs)([AAC_LADDER, null]);
+    // Outputs from before the index existed, not backfilled yet.
+    Output::whereIn('id', $outputs->pluck('id'))->update(['template_index' => null]);
+
+    $entries = resolveAudio($this->video, 2);
+
+    expect($entries)->toHaveCount(1)
+        ->and($entries[0]['output']->id)->toBe($outputs[0]->id);
+});

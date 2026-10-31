@@ -52,11 +52,22 @@ class UpdateStreamData extends RequestData
                 function (string $attribute, mixed $value, Closure $fail) {
                     $primary = strtolower(explode('-', (string) $value)[0]);
 
-                    if (! Languages::exists($primary) && ! Languages::alpha3CodeExists($primary)) {
+                    if (! Languages::exists($primary) && ! Languages::alpha3CodeExists($primary) && ! self::isSpecialLanguage($primary)) {
                         $fail('The :attribute is not a known language.');
                     }
                 },
             ],
         ];
+    }
+
+    /**
+     * ISO 639-2 codes that name no language but are what an honest label needs: `und` (unknown),
+     * `mul` (several), `zxx` (no linguistic content — music, effects), `mis` (uncoded), and the
+     * `qaa`–`qtz` range reserved for local use (a director's commentary, say). CLDR lists none.
+     */
+    public static function isSpecialLanguage(string $code): bool
+    {
+        return in_array($code, ['und', 'mul', 'zxx', 'mis'], true)
+            || (strlen($code) === 3 && $code >= 'qaa' && $code <= 'qtz');
     }
 }

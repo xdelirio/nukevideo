@@ -102,7 +102,7 @@ class TrackPublisher
                     if ($edited !== $original) {
                         $written[$path] = $original;
 
-                        if (! $disk->put($path, $edited, ['ContentType' => ManifestEditor::contentType(self::format($path))])) {
+                        if (! $disk->put($path, $edited, ManifestEditor::writeOptions(self::format($path)))) {
                             throw new RuntimeException("Could not write the published manifest {$path}.");
                         }
                     }
@@ -124,7 +124,7 @@ class TrackPublisher
             // at segments deleted just below, and break playback of the whole output. Put the
             // copies read under the lock back first, then drop what this track uploaded.
             foreach ($written as $path => $original) {
-                $disk->put($path, $original, ['ContentType' => ManifestEditor::contentType(self::format($path))]);
+                $disk->put($path, $original, ManifestEditor::writeOptions(self::format($path)));
             }
 
             foreach ($uploaded as $key) {

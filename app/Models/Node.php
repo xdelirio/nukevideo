@@ -65,12 +65,18 @@ class Node extends Model
      * The scheme every URL to a proxy node is built with: the link the API mints, the URL the
      * health probe fetches, the `VOD_BASE_URL` a node is deployed with and the Traefik router in
      * front of the edge ({@see NodeService}) all have to agree on this one place.
-     * It follows APP_URL rather than the environment, so a development stack served over HTTPS
-     * works exactly like production, and a plain-HTTP one keeps working. An APP_URL with no
-     * scheme is taken as HTTPS, the safe side for links handed to the public.
+     * In development it follows APP_URL, so a stack served over HTTPS works exactly like
+     * production and a plain-HTTP one keeps working; an APP_URL with no scheme is taken as HTTPS.
      */
     public static function proxyScheme(): string
     {
+        // Outside local, always HTTPS, as before this followed APP_URL: a production APP_URL on
+        // plain http (TLS terminated in front of the API) must not take the public edge — and the
+        // links every player loads — down to http with it.
+        if (! app()->isLocal()) {
+            return 'https://';
+        }
+
         return (parse_url((string) config('app.url'), PHP_URL_SCHEME) ?: 'https').'://';
     }
 

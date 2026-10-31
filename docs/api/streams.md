@@ -29,7 +29,7 @@ PUT|PATCH /api/streams/{ulid}
 | Field | Type | Notes |
 |-------|------|-------|
 | `name` | string | **Required.** Shown in the player's track selector. Must be unique among the video's tracks of the same type, and cannot contain `,`, `"` or a line break. |
-| `language` | string \| null | **Required**, but nullable. BCP-47 (`es`, `en-US`, `es-MX`), and it must be a language that exists — the packager normalizes it, so a manifest may show `en` for a source tagged `eng`. |
+| `language` | string \| null | **Required**, but nullable. BCP-47 (`es`, `en-US`, `es-MX`), and it must be a language that exists — the packager normalizes it, so a manifest may show `en` for a source tagged `eng`. The codes that name no language are accepted as well: `und`, `mul`, `zxx`, `mis` and `qaa`–`qtz`. |
 | `forced` | boolean | **Required**, on every stream. Takes effect on subtitles only — marks a track that carries foreign-language dialogue; on audio it is stored and changes nothing. |
 | `hearingImpaired` | boolean \| null | Optional, **subtitles only** — a `true` on an audio track is a `422`, because audio SDH is baked into the packaged manifests. Omit it (or send `null`) to keep whatever the probe or a previous edit set. Stored in the stream's `meta`, and returned lifted out of it as `hearingImpaired`. |
 
@@ -142,7 +142,7 @@ of `metadata.template`:
 | `metadata.video` | string | **Required.** ULID of a `completed` video of that project. |
 | `metadata.trackType` | string | **Required.** `audio` or `subtitle`. Not `type`: Uppy fills that field with the file's MIME type. |
 | `metadata.trackName` | string | **Required.** Up to 240 characters — room for the layout suffix a ladder adds. Same rules as `name` in [Update Stream](#update-stream): unique among the video's tracks of that type, no `,`, `"` or line break. Not `name`, for the same reason as above. |
-| `metadata.language` | string | **Required.** BCP-47, as in [Update Stream](#update-stream). |
+| `metadata.language` | string | **Required.** BCP-47, as in [Update Stream](#update-stream). `und` (unknown), `mul` (several), `zxx` (no speech — music, effects) and `qaa`–`qtz` (local use, e.g. a commentary) are accepted too. |
 | `metadata.forced` | boolean | Optional, subtitles only. |
 | `metadata.hearingImpaired` | boolean | Optional. SDH subtitles, or a dialogue-enhanced audio mix. |
 | `metadata.visualImpaired` | boolean | Optional, audio only. An audio-description track. |
@@ -170,9 +170,14 @@ failed automatically after about seven hours.
   **version** the video was encoded with: editing the template since changes nothing for it. An
   Opus track is only added to DASH manifests, as at ingest.
 - **Audio is fitted to the video's duration**: padded with silence when shorter, cut when longer.
-  A file more than **10%** longer or shorter than the video is refused (`failed`) as almost
-  certainly the wrong file. Timing is taken as is from `0`; there is no offset.
-- **Subtitles** are converted to WebVTT and added to every output. A file with no cues fails.
+  A file that differs from the video by more than **2 seconds or 1%**, whichever is larger
+  (72 seconds on a two-hour film), is refused (`failed`) as almost certainly another cut. So is a
+  file whose length cannot be read. Timing is taken as is from `0`; there is no offset. Only the
+  file's first audio stream is used.
+- **Subtitles** are converted to WebVTT and added to every output. UTF-8, UTF-16 (with a byte-order
+  mark) and Windows-1252/Latin-1 files are all read correctly. A file with no cues fails, and so
+  does one whose cues all start after the video ends. ASS/SSA styling and positioning are dropped:
+  WebVTT carries the text.
 
 While a track is `processing` it cannot be edited or deleted (`409`). A `failed` track can be
 deleted. A `ready` one is an ordinary stream: edit, download and delete it like any other.

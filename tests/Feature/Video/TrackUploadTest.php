@@ -247,3 +247,31 @@ it('sweeps the scratch an added track run left behind once it is past any run', 
     expect($disk->exists(AddTrackJob::SCRATCH_DIR.'/old'))->toBeFalse()
         ->and($disk->exists(AddTrackJob::SCRATCH_DIR.'/fresh/package/1.m4s'))->toBeTrue();
 });
+
+it('accepts the flags as Uppy sends them, stringified', function () {
+    // @uppy/aws-s3 passes every metadata value through String(): booleans arrive as "true"/"false".
+    $key = $this->getJson(($this->params)(['trackType' => 'subtitle', 'trackName' => 'Forced', 'forced' => 'true', 'hearingImpaired' => 'false', 'visualImpaired' => 'false'], 'f.srt'))
+        ->assertOk()->json('key');
+
+    $meta = app(UppyS3Service::class)->getUploadMeta($key);
+
+    expect($meta->forced)->toBeTrue()
+        ->and($meta->hearingImpaired)->toBeFalse()
+        ->and($meta->visualImpaired)->toBeFalse();
+});
+
+it('accepts the codes that name no language: unknown, several, none, local use', function (string $code) {
+    $this->getJson(($this->params)(['language' => $code, 'trackName' => "Track {$code}"]))->assertOk();
+})->with(['und', 'mul', 'zxx', 'qaa']);
+
+it('dispatches again for a row a dead first ingest left without a job', function () {
+    Queue::fake();
+    $key = 'tmp-videos/'.Str::ulid().'.wav';
+    $stream = $this->video->streams()->create([
+        'path' => $key, 'type' => 'audio', 'name' => 'Orphan', 'status' => StreamStatus::PROCESSING, 'meta' => ['track_upload' => $key],
+    ]);
+
+    app(TrackIngestService::class)->handle($key, 10);
+
+    Queue::assertPushed(AddTrackJob::class, fn ($job) => $job->streamId === $stream->id);
+});

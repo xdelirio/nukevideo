@@ -46,9 +46,8 @@ it('serves the edge over TLS when APP_URL is https, even in development', functi
         ->and($script)->toContain('VOD_BASE_URL=https://nv-cdn.delirio.org');
 });
 
-it('serves the edge over plain HTTP when APP_URL is http, even in production', function () {
-    app()->detectEnvironment(fn () => 'production');
-    config(['app.url' => 'http://api.example.test']);
+it('serves the edge over plain HTTP when a development APP_URL is http', function () {
+    config(['app.url' => 'http://api.nukevideo.localhost']);
 
     $script = app(NodeService::class)->buildDeployScript($this->node, []);
     $router = ($this->router)();
@@ -57,6 +56,19 @@ it('serves the edge over plain HTTP when APP_URL is http, even in production', f
         ->and($script)->toContain("traefik.http.routers.{$router}.entrypoints=web")
         ->and($script)->not->toContain("traefik.http.routers.{$router}.tls")
         ->and($script)->toContain('VOD_BASE_URL=http://nv-cdn.delirio.org');
+});
+
+it('keeps production on HTTPS whatever APP_URL says', function () {
+    // TLS terminated in front of the API is no reason to serve the public edge over http.
+    app()->detectEnvironment(fn () => 'production');
+    config(['app.url' => 'http://api.example.test']);
+
+    $script = app(NodeService::class)->buildDeployScript($this->node, []);
+    $router = ($this->router)();
+
+    expect(Node::proxyScheme())->toBe('https://')
+        ->and($script)->toContain("traefik.http.routers.{$router}.entrypoints=websecure")
+        ->and($script)->toContain('VOD_BASE_URL=https://nv-cdn.delirio.org');
 });
 
 it('falls back to https when APP_URL states no scheme', function () {

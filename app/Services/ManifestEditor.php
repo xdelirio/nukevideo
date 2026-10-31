@@ -46,10 +46,19 @@ class ManifestEditor
         'hls' => 'application/vnd.apple.mpegurl',
     ];
 
-    /** The Content-Type a manifest of `$format` (`hls`|`dash`) must be written with ({@see CONTENT_TYPES}). */
-    public static function contentType(string $format): string
+    /**
+     * How long a CDN may keep a manifest. Manifests are edited in place after publishing — a track
+     * added, relabelled or removed — and a pull zone that falls back to a long default TTL keeps
+     * serving the old one: the new track invisible, a removed one pointing at deleted segments.
+     * The self-hosted edge ignores this and applies its own 30s ({@see vod/nginx}); Bunny honours
+     * it. Segments never change under their key, so they carry none.
+     */
+    public const MANIFEST_CACHE_CONTROL = 'public, max-age=30';
+
+    /** The object options a manifest of `$format` (`hls`|`dash`) is written with. */
+    public static function writeOptions(string $format): array
     {
-        return self::CONTENT_TYPES[$format];
+        return ['ContentType' => self::CONTENT_TYPES[$format], 'CacheControl' => self::MANIFEST_CACHE_CONTROL];
     }
 
     /**
@@ -77,7 +86,7 @@ class ManifestEditor
                         : $this->hlsRemoveSubtitle($content, $ulid);
 
                     if ($edited !== null && $edited !== $content) {
-                        $disk->put($manifest['path'], $edited, ['ContentType' => self::CONTENT_TYPES[$manifest['format']]]);
+                        $disk->put($manifest['path'], $edited, self::writeOptions($manifest['format']));
                     }
                 }
             }
@@ -104,7 +113,7 @@ class ManifestEditor
                     : $this->hlsRemove($content, $ulid);
 
                 if ($edited !== null && $edited !== $content) {
-                    $disk->put($path, $edited, ['ContentType' => self::CONTENT_TYPES[$format]]);
+                    $disk->put($path, $edited, self::writeOptions($format));
                 }
             }
         }
@@ -152,7 +161,7 @@ class ManifestEditor
                     : $this->hlsRelabel($content, $stream, $fields);
 
                 if ($edited !== null) {
-                    $disk->put($path, $edited, ['ContentType' => self::CONTENT_TYPES[$format]]);
+                    $disk->put($path, $edited, self::writeOptions($format));
                 }
             }
         }
@@ -830,9 +839,10 @@ class ManifestEditor
                 $media = $line;
             } elseif (str_starts_with($line, '#EXT-X-STREAM-INF')) {
                 $codecs = preg_match('/CODECS="([^"]+)"/', $line, $c) ? $c[1] : null;
-                $bandwidth = preg_match('/(?<![-A-Z])BANDWIDTH=(\d+)/', $line, $b) ? (int) $b[1] : 0;
             }
         }
+
+        $bandwidth = $this->hlsTrackBandwidth($audioMaster);
 
         if ($media === null || ! preg_match('/URI="([^"]+)"/', $media, $uri) || str_contains($masterContent, "URI=\"{$uri[1]}\"")) {
             return null;
@@ -875,6 +885,12 @@ class ManifestEditor
 
             return $line;
         });
+    }
+
+    /** The peak rate (bits/s) a single-track throwaway master declares for its track; 0 if none. */
+    public function hlsTrackBandwidth(string $trackMaster): int
+    {
+        return preg_match('/^#EXT-X-STREAM-INF:.*?(?<![-A-Z])BANDWIDTH=(\d+)/m', $trackMaster, $b) ? (int) $b[1] : 0;
     }
 
     /**

@@ -67,22 +67,48 @@ class Template extends Model implements Sortable
         static::saved(function (Template $template) {
             // `wasRecentlyCreated` stays true for the instance's whole life, so on its own it would
             // cut a version on every later save of the model that created it.
-            if (($template->wasRecentlyCreated && ! $template->current_version_id) || $template->wasChanged('query')) {
-                $template->cutVersion();
+            if ($template->wasRecentlyCreated && ! $template->current_version_id) {
+                $template->cutVersion($template->query);
+
+                return;
+            }
+
+            if ($template->wasChanged('query')) {
+                // A template from before versions existed, edited before the backfill reached it:
+                // its videos were encoded with the query this edit replaces, so that one is kept
+                // as version 1 rather than lost.
+                if (! $template->current_version_id) {
+                    $template->cutVersion($template->getOriginal('query'));
+                }
+
+                $template->cutVersion($template->query);
             }
         });
     }
 
     /**
-     * Record the current `query` as the next immutable version and make it current. The pointer is
+     * The version an upload made now is pinned to, cut on the spot for a template that predates
+     * versions and has not been backfilled: pinning must not wait for an operator.
+     */
+    public function ensureCurrentVersion(): TemplateVersion
+    {
+        if (! $this->current_version_id) {
+            $this->cutVersion($this->query);
+        }
+
+        return $this->currentVersion()->firstOrFail();
+    }
+
+    /**
+     * Record `$query` as the next immutable version and make it current. The pointer is
      * written without events: it is bookkeeping of this very save, not an edit of its own.
      */
-    private function cutVersion(): void
+    private function cutVersion(?array $query): void
     {
-        DB::transaction(function () {
+        DB::transaction(function () use ($query) {
             $version = $this->versions()->create([
                 'version' => (int) $this->versions()->lockForUpdate()->max('version') + 1,
-                'query' => $this->query,
+                'query' => $query ?? [],
             ]);
 
             $this->forceFill(['current_version_id' => $version->id])->saveQuietly();
