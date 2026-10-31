@@ -69,7 +69,7 @@ class AddTrackService
         $probe = app(TrackProbe::class)->probe($source, $placeholder->type);
 
         if ($probe === null) {
-            throw new RuntimeException("The file has no {$placeholder->type} track.");
+            throw new RuntimeException("The file has no readable {$placeholder->type} track.");
         }
 
         $prepared = $placeholder->type === 'audio'
