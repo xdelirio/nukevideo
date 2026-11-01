@@ -19,7 +19,25 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 - Resolves the real client IP behind Cloudflare or another reverse proxy.
 - Ships access-log bandwidth to the API through a Vector.dev pipeline.
 
-Token validation is configured in **CDN Settings** under the `self_hosted` provider (token secret, token name, token window). These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
+Token validation is configured in **CDN Settings** under the `self_hosted` provider (token secret, token name, token window, IP binding). These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
+
+### IP binding
+
+By default a playback link plays from anywhere until it expires. Turn on **Bind playback links to
+the viewer's IP** and every playback token is signed with the address it was minted for — the `ip`
+the request named, or the caller's own — and the edge answers `403` to any request from another
+address: the manifest and every segment, since they share the token. The address is signed, so it
+cannot be edited out of the URL.
+
+- **Integrations must mint with the viewer's `ip`.** A backend that mints without it binds every
+  link to its own server's address, and nothing plays.
+- **An address change ends the session.** A phone moving from Wi-Fi to mobile data, or a dual-stack
+  viewer who reached the API over IPv4 and the edge over IPv6, gets a `403` and has to request a new
+  link. Addresses are compared exactly; IPv6 is not widened to a `/64`.
+- **Downloads are not bound**: their tokens carry no address, so a download manager can resume from
+  anywhere.
+- **It applies to links minted from then on**, with no redeploy. Turning it off does not release
+  links minted while it was on: they stay bound until they expire.
 
 **Choose self-hosted when** you want full control over delivery, keep traffic on your own infrastructure, need the built-in bandwidth analytics per node, or already run edge servers.
 
@@ -92,7 +110,7 @@ php artisan bunny:ingest-logs --from=2026-08-20T10:00:00Z
 | Infrastructure to run | Your own proxy servers | None (managed by Bunny) |
 | Origin | S3 (via AWS auth) | S3 pull-zone origin |
 | Token scheme | Akamai-style HMAC | HMAC-SHA256, directory mode |
-| IP binding | Not IP-bound (the token carries the IP, the edge never checks it) | Not IP-bound |
+| IP binding | Optional, off by default ([IP binding](#ip-binding)) | Not IP-bound |
 | Edge caching | Local nginx cache per node | Bunny global edge |
 | Bandwidth analytics | Built-in (Vector → API) | Built-in (Logging API poll) |
 

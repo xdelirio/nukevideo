@@ -106,6 +106,7 @@ export type SelfHostedConfigData = {
 tokenSecret: string,
 tokenName: string,
 tokenWindow: number,
+bindIp: boolean,
 };
 export type ServiceStatusData = {
 name: string,

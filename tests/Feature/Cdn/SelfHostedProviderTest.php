@@ -35,6 +35,17 @@ function fakeSelfHostedSettings(): void
     ]);
 }
 
+function bindIpSettings(): void
+{
+    CdnSettings::fake([
+        'provider' => 'self_hosted',
+        'providers' => [
+            'self_hosted' => ['token_secret' => bin2hex('secret'), 'token_window' => 3600, 'bind_ip' => true],
+            'bunny' => [],
+        ],
+    ]);
+}
+
 /** The ACL the edge would enforce, with the trailing `*` stripped: everything it authorizes starts with this. */
 function signedAclPrefix(string $url): string
 {
@@ -173,5 +184,39 @@ describe('the token handed back with a link', function () {
         expect($link->token)->toBeNull()
             ->and($link->tokenHash)->toBeNull()
             ->and($link->url)->not->toContain('__hdnea__');
+    });
+});
+
+describe('the address signed into a playback link', function () {
+    it('is left out unless the operator binds links to it, since the edge enforces any it finds', function () {
+        [$video, $output] = signedVideo();
+
+        $link = app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), '203.0.113.7', false);
+
+        expect($link->token)->not->toContain('ip=');
+    });
+
+    it('is written the way the edge writes the viewer, since the edge compares the two as strings', function (string $given, string $signed) {
+        bindIpSettings();
+        [$video, $output] = signedVideo();
+
+        $link = app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), $given, false);
+
+        // nginx renders $remote_addr compressed and lowercase, and its IPv4 listener never sees
+        // a mapped address: with binding on, anything else was a 403 for the very viewer it named.
+        expect($link->token)->toContain("~ip={$signed}~hmac=");
+    })->with([
+        'IPv4 as given' => ['203.0.113.7', '203.0.113.7'],
+        'IPv6 expanded and uppercase' => ['2001:DB8:0:0:0:0:0:1', '2001:db8::1'],
+        'IPv4-mapped IPv6' => ['::ffff:203.0.113.7', '203.0.113.7'],
+    ]);
+
+    it('is left out of a download even when binding is on', function () {
+        bindIpSettings();
+        [$video] = signedVideo();
+
+        $link = app(SelfHostedProvider::class)->downloadUrl($video->ulid, "{$video->ulid}/download/video/720.mp4", false);
+
+        expect($link->token)->not->toContain('~ip=');
     });
 });
