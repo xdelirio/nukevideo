@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\UsageMetric;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -26,6 +27,17 @@ class UsageService
         'tracking_id' => '',
         'node_id' => 0,
         'cache' => '',
+    ];
+
+    /**
+     * The rollups of delivered bytes, by table, with the one `usage_daily` dimension each keeps.
+     * Written beside `usage_daily` on every {@see add()} and read by the dashboard
+     * ({@see AnalyticsService}); the migration that creates them says why there are three.
+     */
+    public const ROLLUPS = [
+        'usage_daily_by_video' => 'video_ulid',
+        'usage_daily_by_ip' => 'ip',
+        'usage_daily_by_tracking_id' => 'tracking_id',
     ];
 
     // Thirteen bindings a row: well inside what either database accepts in one statement.
@@ -102,11 +114,68 @@ class UsageService
 
         ksort($folded, SORT_STRING);
 
-        DB::transaction(function () use ($folded) {
+        $rollups = self::rollups($folded);
+
+        DB::transaction(function () use ($folded, $rollups) {
             foreach (array_chunk(array_values($folded), self::CHUNK) as $chunk) {
                 DB::table(self::TABLE)->upsert($chunk, array_keys(self::DIMENSIONS), self::updates());
             }
+
+            // In the same transaction as the rows they summarise, so a rollup can never hold a
+            // batch that `usage_daily` does not, or miss one it does — a retry after a failure
+            // would otherwise count the half that landed twice. Always after `usage_daily` and in
+            // the order of the constant, so two concurrent batches take their locks in the same
+            // order and queue instead of deadlocking.
+            $sum = ['value' => self::updates()['value']];
+
+            foreach ($rollups as $table => $rows) {
+                foreach (array_chunk($rows, self::CHUNK) as $chunk) {
+                    DB::table($table)->upsert($chunk, ['project_id', 'date', 'metric', self::ROLLUPS[$table]], $sum);
+                }
+            }
         }, 3);
+    }
+
+    /**
+     * The folded batch summed down to each rollup's grain: the delivery rows only, keyed by date,
+     * project, metric and the rollup's one dimension, in key order for the same reason the batch
+     * itself is.
+     *
+     * @param  array<string, array<string, mixed>>  $folded
+     * @return array<string, list<array<string, mixed>>>
+     */
+    private static function rollups(array $folded): array
+    {
+        $delivery = array_flip(UsageMetric::delivery());
+        $rollups = [];
+
+        foreach (self::ROLLUPS as $table => $column) {
+            $rows = [];
+
+            foreach ($folded as $row) {
+                if (! isset($delivery[$row['metric']])) {
+                    continue;
+                }
+
+                $key = implode("\x1f", [$row['project_id'], $row['date'], $row['metric'], $row[$column]]);
+
+                $rows[$key] ??= [
+                    'date' => $row['date'],
+                    'project_id' => $row['project_id'],
+                    'metric' => $row['metric'],
+                    $column => $row[$column],
+                    'value' => 0.0,
+                ];
+                $rows[$key]['value'] += $row['value'];
+            }
+
+            if ($rows !== []) {
+                ksort($rows, SORT_STRING);
+                $rollups[$table] = array_values($rows);
+            }
+        }
+
+        return $rollups;
     }
 
     /**

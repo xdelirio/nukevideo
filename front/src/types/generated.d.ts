@@ -230,6 +230,15 @@ bytes: number,
 sessions: number,
 };
 export type BatchQueryData = object;
+export type DashboardQueryData = {
+from: string,
+to: string,
+video: string | null,
+trackingId?: string | null,
+metric: string | null,
+limit: number | null,
+videoSeriesLimit: number | null,
+};
 export type EdgeDeliveryData = {
 nodeId: number,
 deliveredBytes: number,

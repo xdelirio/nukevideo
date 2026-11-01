@@ -226,7 +226,10 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
 - Metrics live in MariaDB, in `usage_daily`: one row per day per combination of dimensions, and
   the unique key over those dimensions IS the aggregation. Every write goes through
   `UsageService::add()`, which upserts `value = value + new`; a plain insert or an Eloquent
-  `upsert()` either fails on the key or overwrites a total. Reads go through `AnalyticsService`
+  `upsert()` either fails on the key or overwrites a total. `add()` also keeps three per-dimension
+  rollups of delivered bytes (`usage_daily_by_{video,ip,tracking_id}`, `UsageService::ROLLUPS`) in
+  the same transaction, and the dashboard reads those, not `usage_daily`: a row written any other
+  way never reaches the dashboard. Reads go through `AnalyticsService`
   on the query builder with nothing MariaDB-only, because the suite runs them on SQLite.
   `country` is the one column outside the key: `GeoIp` resolves it from the address at ingest, off
   a GeoLite2 file on the local disk of the container draining `default` — there is no shared

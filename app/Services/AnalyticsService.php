@@ -15,9 +15,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Every read over `usage_daily`. Written against the query builder and nothing database-specific:
- * the table lives in MariaDB and the suite runs it on SQLite, so a function only one of them has
- * is a query only one of them can test.
+ * Every read over `usage_daily` and its rollups. Written against the query builder and nothing
+ * database-specific: the tables live in MySQL or MariaDB and the suite runs them on SQLite, so a
+ * function only one of them has is a query only one of them can test.
+ *
+ * The dashboard reads ({@see summary()}, the series and the rankings) go to the per-dimension
+ * rollups whenever they can ({@see delivered()}); `usage_daily` answers the rest: the filtered
+ * views, the per-row distinct counts of the rankings, billing and the general query.
  */
 class AnalyticsService
 {
@@ -59,20 +63,7 @@ class AnalyticsService
      */
     private function bandwidth(string $from, string $to, ?string $video, ?string $trackingId, ?string $metric = null, ?int $projectId = null): Builder
     {
-        $query = self::usage($from, $to)->whereIn('metric', UsageMetric::delivery());
-
-        // The only clause that can narrow this table to one tenant. Everything else here is a
-        // filter a caller chooses; this one is imposed on it.
-        if ($projectId !== null) {
-            $query->where('project_id', $projectId);
-        }
-
-        // Narrowing to a single delivery metric — streaming alone, downloads alone. Still inside
-        // the constant set above, so an unknown metric simply matches nothing rather than reaching
-        // across into upload or encoding rows.
-        if ($metric !== null && $metric !== '') {
-            $query->where('metric', $metric);
-        }
+        $query = self::scoped(self::usage($from, $to), $metric, $projectId);
 
         if ($video !== null && $video !== '') {
             $query->where('video_ulid', $video);
@@ -88,27 +79,88 @@ class AnalyticsService
         return $query;
     }
 
+    /**
+     * The delivery set, the tenant and the metric: the part of the predicate `usage_daily` and the
+     * rollups share, since every one of them carries those three columns.
+     */
+    private static function scoped(Builder $query, ?string $metric, ?int $projectId): Builder
+    {
+        $query->whereIn('metric', UsageMetric::delivery());
+
+        // The only clause that can narrow this table to one tenant. Everything else here is a
+        // filter a caller chooses; this one is imposed on it.
+        if ($projectId !== null) {
+            $query->where('project_id', $projectId);
+        }
+
+        // Narrowing to a single delivery metric — streaming alone, downloads alone. Still inside
+        // the constant set above, so an unknown metric simply matches nothing rather than reaching
+        // across into upload or encoding rows.
+        if ($metric !== null && $metric !== '') {
+            $query->where('metric', $metric);
+        }
+
+        return $query;
+    }
+
+    /**
+     * The cheapest source for a delivery read that sums `value` over a single dimension: that
+     * dimension's rollup ({@see UsageService::ROLLUPS}) when it can answer, `usage_daily` when it
+     * cannot.
+     *
+     * A rollup can answer whenever no video or tracking id filter was asked for. Those filters
+     * name a column the rollup does not keep — the address rollup has no video in it — and a
+     * filtered view is small anyway: `usage_daily` reaches it through the index that leads with
+     * the filtered column. Unfiltered, the rollup holds a twelfth of the rows for the same answer.
+     *
+     * The query reads the same way on either table: `date`, `project_id`, `metric`, `value` and
+     * `$column` exist on both, so a caller writes it once and never knows which one it got.
+     *
+     * @param  string  $column  `video_ulid`, `ip` or `tracking_id` — class-controlled, never input
+     */
+    private function delivered(string $column, string $from, string $to, ?string $video, ?string $trackingId, ?string $metric, ?int $projectId): Builder
+    {
+        if (($video !== null && $video !== '') || $trackingId !== null) {
+            return $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId);
+        }
+
+        $table = array_search($column, UsageService::ROLLUPS, true);
+
+        return self::scoped(DB::table($table)->whereBetween('date', [$from, $to]), $metric, $projectId);
+    }
+
     public function summary(string $from, string $to, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
-        $row = $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId)
+        // One read per distinct count, each over the rollup that keeps its column. The total rides
+        // along with the addresses: every delivered byte is in exactly one address row, so the sum
+        // there is the sum of everything.
+        $ips = $this->delivered('ip', $from, $to, $video, $trackingId, $metric, $projectId)
             ->selectRaw('sum(value) as total_bytes')
-            ->selectRaw('count(distinct video_ulid) as unique_videos')
             ->selectRaw('count(distinct ip) as unique_ips')
+            ->first();
+
+        $videos = $this->delivered('video_ulid', $from, $to, $video, $trackingId, $metric, $projectId)
+            ->selectRaw('count(distinct video_ulid) as unique_videos')
+            ->first();
+
+        $trackingIds = $this->delivered('tracking_id', $from, $to, $video, $trackingId, $metric, $projectId)
             ->selectRaw('count(distinct tracking_id) as unique_tracking_ids')
             ->first();
 
         return [
-            'total_bytes' => (int) ($row->total_bytes ?? 0),
-            'unique_videos' => (int) ($row->unique_videos ?? 0),
-            'unique_ips' => (int) ($row->unique_ips ?? 0),
-            'unique_tracking_ids' => (int) ($row->unique_tracking_ids ?? 0),
+            'total_bytes' => (int) ($ips->total_bytes ?? 0),
+            'unique_videos' => (int) ($videos->unique_videos ?? 0),
+            'unique_ips' => (int) ($ips->unique_ips ?? 0),
+            'unique_tracking_ids' => (int) ($trackingIds->unique_tracking_ids ?? 0),
         ];
     }
 
     public function bandwidthOverTime(string $from, string $to, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
+        // Off the address rollup alone: its rows add up to every byte of the day, and its distinct
+        // addresses are the day's sessions.
         return self::rows(
-            $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId)
+            $this->delivered('ip', $from, $to, $video, $trackingId, $metric, $projectId)
                 ->select('date')
                 ->selectRaw('sum(value) as bytes')
                 ->selectRaw('count(distinct ip) as sessions')
@@ -119,15 +171,62 @@ class AnalyticsService
 
     public function topIps(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
-        return self::rows(
-            $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId)
+        $top = self::rows(
+            $this->delivered('ip', $from, $to, $video, $trackingId, $metric, $projectId)
                 ->select('ip')
                 ->selectRaw('sum(value) as bytes')
-                ->selectRaw('count(distinct video_ulid) as sessions')
                 ->groupBy('ip')
                 ->orderByDesc('bytes')
                 ->limit($limit)
         );
+
+        return $this->countDistinctFor($top, 'ip', 'ip', $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId), ['sessions' => 'video_ulid']);
+    }
+
+    /**
+     * The second half of every ranking that carries a distinct count: the count, for the rows that
+     * made the top N and no others.
+     *
+     * These counts cross two dimensions — distinct videos per address, distinct addresses per
+     * video — so no single-dimension rollup holds them, and `usage_daily` has to. Counted in the
+     * same pass as the ranking they cost seconds: `count(distinct …)` remembers every value of
+     * every group across the range — 90k addresses for 13k videos on a production month — to then
+     * throw all but ten groups away. Counted after it, they read the winners' own rows through the
+     * index that leads with the ranked column, in milliseconds.
+     *
+     * `$query` is `usage_daily` under the same filters the ranking had, so the count covers the
+     * traffic the sum did and the two numbers on a line describe the same bytes.
+     *
+     * @param  array<int, array<string, mixed>>  $top  the ranking, in order
+     * @param  string  $key  the field of `$top` that holds the ranked value
+     * @param  string  $column  the `usage_daily` column it came from
+     * @param  array<string, string>  $counts  output field => column counted distinct. Both are
+     *                                         class-controlled names, never caller input.
+     * @return array<int, array<string, mixed>>
+     */
+    private function countDistinctFor(array $top, string $key, string $column, Builder $query, array $counts): array
+    {
+        if ($top === []) {
+            return [];
+        }
+
+        $query->whereIn($column, array_column($top, $key))
+            ->select("{$column} as ranked")
+            ->groupBy($column);
+
+        foreach ($counts as $field => $counted) {
+            $query->selectRaw("count(distinct {$counted}) as {$field}");
+        }
+
+        $found = $query->get()->keyBy('ranked');
+
+        return array_map(function (array $row) use ($found, $key, $counts) {
+            foreach (array_keys($counts) as $field) {
+                $row[$field] = (int) ($found[$row[$key]]->{$field} ?? 0);
+            }
+
+            return $row;
+        }, $top);
     }
 
     /**
@@ -140,16 +239,19 @@ class AnalyticsService
      */
     public function bandwidthByTrackingId(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
-        return self::rows(
-            $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId)
+        // Ranked first and counted after ({@see countDistinctFor()}). The empty id — unattributed
+        // traffic — is usually the largest group by far and still makes the top N, so its count is
+        // the one that costs anything here; it is still a fraction of counting every group.
+        $top = self::rows(
+            $this->delivered('tracking_id', $from, $to, $video, $trackingId, $metric, $projectId)
                 ->select('tracking_id')
                 ->selectRaw('sum(value) as bytes')
-                ->selectRaw('count(distinct video_ulid) as videos')
-                ->selectRaw('count(distinct ip) as unique_ips')
                 ->groupBy('tracking_id')
                 ->orderByDesc('bytes')
                 ->limit($limit)
         );
+
+        return $this->countDistinctFor($top, 'tracking_id', 'tracking_id', $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId), ['videos' => 'video_ulid', 'unique_ips' => 'ip']);
     }
 
     /**
@@ -325,20 +427,21 @@ class AnalyticsService
 
     public function topVideos(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
-        // `sessions` and `unique_ips` are the same count under the names the response has always
-        // carried. Counted once: a distinct count is the expensive part of this query, and asking
-        // for the same one twice made the database do it twice.
-        $rows = self::rows(
-            $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId)
+        $top = self::rows(
+            $this->delivered('video_ulid', $from, $to, $video, $trackingId, $metric, $projectId)
                 ->where('video_ulid', '!=', '')
                 ->select('video_ulid as video')
                 ->selectRaw("'' as external_resource_id")
                 ->selectRaw('sum(value) as bytes')
-                ->selectRaw('count(distinct ip) as sessions')
                 ->groupBy('video_ulid')
                 ->orderByDesc('bytes')
                 ->limit($limit)
         );
+
+        // `sessions` and `unique_ips` are the same count under the names the response has always
+        // carried. Counted once, and only for the videos that made the list
+        // ({@see countDistinctFor()}).
+        $rows = $this->countDistinctFor($top, 'video', 'video_ulid', $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId), ['sessions' => 'ip']);
 
         return array_map(fn (array $row) => $row + ['unique_ips' => $row['sessions']], $rows);
     }
@@ -347,16 +450,18 @@ class AnalyticsService
     {
         // Joined rather than `IN (subquery)`: MariaDB refuses a LIMIT inside one. The column takes
         // an alias of its own so the outer filters, which name `video_ulid` bare, stay unambiguous.
-        $top = $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId)
+        $top = $this->delivered('video_ulid', $from, $to, $video, $trackingId, $metric, $projectId)
             ->where('video_ulid', '!=', '')
             ->select('video_ulid as top_video')
             ->groupBy('video_ulid')
             ->orderByRaw('sum(value) desc')
             ->limit($limit);
 
+        $series = $this->delivered('video_ulid', $from, $to, $video, $trackingId, $metric, $projectId);
+
         return self::rows(
-            $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId)
-                ->joinSub($top, 'top', 'top.top_video', '=', UsageService::TABLE.'.video_ulid')
+            $series
+                ->joinSub($top, 'top', 'top.top_video', '=', $series->from.'.video_ulid')
                 ->select('date', 'video_ulid as video')
                 ->selectRaw('sum(value) as bytes')
                 ->groupBy('date', 'video_ulid')

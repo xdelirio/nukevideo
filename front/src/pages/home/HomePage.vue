@@ -63,10 +63,9 @@ function formatDate(d: string) {
 }
 
 function pctOfTotal(bytes: number): string {
-  if (!data.value) return '0%'
   // Matched on the key, not on a display string. This used to look for 'Total Bandwidth' and every
   // percentage column silently read 0% if that wording ever changed.
-  const total = data.value.cards.find(c => c.key === 'total_bandwidth')?.value ?? 0
+  const total = data.cards.find(c => c.key === 'total_bandwidth')?.value ?? 0
   if (total === 0) return '0%'
   return `${((bytes / total) * 100).toFixed(1)}%`
 }
@@ -113,7 +112,7 @@ function formatCardValue(card: AnalyticsCard): string {
 
     <!-- KPI Cards -->
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      <template v-if="loading">
+      <template v-if="loading.cards">
         <Card v-for="i in 6" :key="i">
           <CardHeader class="pb-2">
             <Skeleton class="h-4 w-24" />
@@ -123,7 +122,7 @@ function formatCardValue(card: AnalyticsCard): string {
           </CardContent>
         </Card>
       </template>
-      <Card v-else v-for="card in data?.cards" :key="card.key">
+      <Card v-else v-for="card in data.cards" :key="card.key">
         <CardHeader class="pb-2">
           <CardTitle class="text-sm font-medium text-muted-foreground">{{ cardLabels[card.key] ?? card.key }}</CardTitle>
         </CardHeader>
@@ -139,8 +138,8 @@ function formatCardValue(card: AnalyticsCard): string {
         <CardTitle class="text-sm font-medium">Bandwidth Over Time</CardTitle>
       </CardHeader>
       <CardContent>
-        <Skeleton v-if="loading" class="h-70 w-full" />
-        <ChartContainer v-else-if="data?.bandwidthOverTime.length" :config="bwChartConfig" class="h-70 w-full" :cursor="true">
+        <Skeleton v-if="loading.bandwidthOverTime" class="h-70 w-full" />
+        <ChartContainer v-else-if="data.bandwidthOverTime.length" :config="bwChartConfig" class="h-70 w-full" :cursor="true">
           <VisXYContainer :data="data.bandwidthOverTime" :padding="{ top: 10 }">
             <VisArea
               :x="(_: BandwidthOverTime, i: number) => i"
@@ -173,8 +172,8 @@ function formatCardValue(card: AnalyticsCard): string {
           <CardTitle class="text-sm font-medium">Top IPs by Bandwidth</CardTitle>
         </CardHeader>
         <CardContent>
-          <Skeleton v-if="loading" class="h-64 w-full" />
-          <Table v-else-if="data?.topIps.length">
+          <Skeleton v-if="loading.topIps" class="h-64 w-full" />
+          <Table v-else-if="data.topIps.length">
             <TableHeader>
               <TableRow>
                 <TableHead>IP</TableHead>
@@ -202,8 +201,8 @@ function formatCardValue(card: AnalyticsCard): string {
           <CardTitle class="text-sm font-medium">Top Videos by Bandwidth</CardTitle>
         </CardHeader>
         <CardContent>
-          <Skeleton v-if="loading" class="h-64 w-full" />
-          <Table v-else-if="data?.topVideos.length">
+          <Skeleton v-if="loading.topVideos" class="h-64 w-full" />
+          <Table v-else-if="data.topVideos.length">
             <TableHeader>
               <TableRow>
                 <TableHead>Video</TableHead>
@@ -237,8 +236,8 @@ function formatCardValue(card: AnalyticsCard): string {
         <CardTitle class="text-sm font-medium">Top Download Tracking IDs by Bandwidth</CardTitle>
       </CardHeader>
       <CardContent>
-        <Skeleton v-if="loading" class="h-64 w-full" />
-        <Table v-else-if="data?.topTrackingIds.length">
+        <Skeleton v-if="loading.topTrackingIds" class="h-64 w-full" />
+        <Table v-else-if="data.topTrackingIds.length">
           <TableHeader>
             <TableRow>
               <TableHead>Tracking ID</TableHead>
@@ -275,8 +274,8 @@ function formatCardValue(card: AnalyticsCard): string {
         <CardTitle class="text-sm font-medium">Top External Users by Upload Volume</CardTitle>
       </CardHeader>
       <CardContent>
-        <Skeleton v-if="loading" class="h-64 w-full" />
-        <Table v-else-if="data?.topExternalUsers.length">
+        <Skeleton v-if="loading.topExternalUsers" class="h-64 w-full" />
+        <Table v-else-if="data.topExternalUsers.length">
           <TableHeader>
             <TableRow>
               <TableHead>External User ID</TableHead>

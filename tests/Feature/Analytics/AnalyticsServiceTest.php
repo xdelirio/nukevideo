@@ -92,6 +92,32 @@ it('ranks addresses, videos and tracking ids by bytes, up to the limit', functio
         ->toEqual(['alice' => 130, 'bob' => 50, '' => 5]);
 });
 
+it('counts distinct viewers, videos and addresses for each ranked row', function () {
+    // Counted after the ranking, for its winners only (`countDistinctFor()`); these pin that the
+    // second query reads the same rows the first one summed.
+    expect(array_column($this->service->topIps('2026-04-01', '2026-04-30', projectId: 1), 'sessions', 'ip'))
+        // 1.1.1.1 watched all three videos; 2.2.2.2 only the first.
+        ->toBe(['1.1.1.1' => 3, '2.2.2.2' => 1])
+        ->and(array_column($this->service->topVideos('2026-04-01', '2026-04-30', projectId: 1), 'unique_ips', 'video'))
+        ->toBe([VIDEO_A => 2, VIDEO_B => 1, VIDEO_C => 1])
+        ->and(array_map(
+            fn (array $row) => [$row['tracking_id'], $row['videos'], $row['unique_ips']],
+            $this->service->bandwidthByTrackingId('2026-04-01', '2026-04-30', projectId: 1),
+        ))->toBe([['alice', 2, 1], ['bob', 1, 1], ['', 1, 1]]);
+});
+
+it('counts within the filters and the project, not across them', function () {
+    // Narrowed to one video, 1.1.1.1 watched one; the other tenant's viewer of VIDEO_C is not
+    // counted towards this project's VIDEO_C.
+    expect(array_column($this->service->topIps('2026-04-01', '2026-04-30', video: VIDEO_A, projectId: 1), 'sessions', 'ip'))
+        ->toBe(['1.1.1.1' => 1, '2.2.2.2' => 1])
+        ->and(array_column($this->service->topVideos('2026-04-01', '2026-04-30', projectId: 1), 'sessions', 'video')[VIDEO_C])
+        ->toBe(1)
+        // A ranking cut by its limit still counts its winners correctly.
+        ->and($this->service->topIps('2026-04-01', '2026-04-30', limit: 1, projectId: 1))
+        ->toEqual([['ip' => '1.1.1.1', 'bytes' => 135, 'sessions' => 3]]);
+});
+
 it('draws the series of the top videos only', function () {
     $rows = $this->service->bandwidthByVideo('2026-04-01', '2026-04-30', limit: 2, projectId: 1);
 
