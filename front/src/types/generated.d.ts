@@ -116,6 +116,7 @@ export type StreamData = {
 ulid: string,
 name: string | null,
 type: string,
+status: App.Enums.StreamStatus | null,
 packageSize: number | null,
 fileSize: number | null,
 inputParams: Record<string, any> | null,
@@ -134,6 +135,7 @@ ulid: string,
 name: string,
 query: Record<string, any>,
 enabled: boolean,
+version: number,
 keepProcessedFiles: boolean,
 keepOriginal: boolean,
 commands: string[],
@@ -170,6 +172,7 @@ priority: App.Enums.VideoPriority,
 createdAt: string,
 externalUserId: string | null,
 externalResourceId: string | null,
+template: App.Data.VideoTemplateData | null,
 thumbnailUrl: string,
 storyboardUrl: string,
 outputs: App.Data.OutputData[],
@@ -180,6 +183,11 @@ servedSize: number,
 export type VideoDownloadLinksData = {
 links: App.Data.DownloadLinkData[],
 skipped: App.Data.SkippedTrackData[],
+};
+export type VideoTemplateData = {
+ulid: string,
+name: string,
+version: number | null,
 };
 export type VideoVodLinksData = {
 videoUlid: string,
@@ -222,6 +230,15 @@ bytes: number,
 sessions: number,
 };
 export type BatchQueryData = object;
+export type DashboardQueryData = {
+from: string,
+to: string,
+video: string | null,
+trackingId?: string | null,
+metric: string | null,
+limit: number | null,
+videoSeriesLimit: number | null,
+};
 export type EdgeDeliveryData = {
 nodeId: number,
 deliveredBytes: number,
@@ -480,6 +497,7 @@ export type MetricUnit = 'bytes' | 'seconds' | 'count';
 export type NodeAccel = 'intel' | 'nvidia';
 export type NodeAction = 'deploy' | 'start' | 'stop';
 export type NodeType = 'worker' | 'proxy';
+export type StreamStatus = 'processing' | 'ready' | 'failed';
 export type UsageGranularity = 'total' | 'daily';
 export type UsageMetric = 'upload_bytes' | 'encoding_cpu' | 'streaming_bytes' | 'download_bytes' | 'asset_bytes' | 'bandwidth_bytes' | 'origin_bytes';
 export type VideoPriority = 'low' | 'normal' | 'high';

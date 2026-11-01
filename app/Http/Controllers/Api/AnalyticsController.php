@@ -6,6 +6,7 @@ use App\Data\Analytics\AnalyticsCardData;
 use App\Data\Analytics\AnalyticsData;
 use App\Data\Analytics\BandwidthByVideoData;
 use App\Data\Analytics\BandwidthPointData;
+use App\Data\Analytics\DashboardQueryData;
 use App\Data\Analytics\EdgeDeliveryData;
 use App\Data\Analytics\EdgeDeliveryQueryData;
 use App\Data\Analytics\EncodingPointData;
@@ -19,16 +20,13 @@ use App\Data\Analytics\VideoBytesData;
 use App\Data\Analytics\VideoBytesQueryData;
 use App\Enums\MetricUnit;
 use App\Enums\UsageGranularity;
-use App\Enums\UsageMetric;
 use App\Enums\VideoStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Node;
 use App\Models\Video;
 use App\Services\AnalyticsService;
-use App\Support\TrackingId;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 
 class AnalyticsController extends Controller
 {
@@ -124,88 +122,150 @@ class AnalyticsController extends Controller
         ]);
     }
 
-    public function index(Request $request): JsonResponse
+    /**
+     * The whole delivery dashboard in one payload: the cards, the series and every breakdown.
+     *
+     * Kept whole for the integrators that read it, and built from the same pieces as the
+     * per-panel endpoints below, so the two can never answer differently. The panel itself uses
+     * those instead: one payload is as slow as its slowest breakdown, and nothing on the page can
+     * show until all of them are done.
+     */
+    public function index(Request $request, DashboardQueryData $query): JsonResponse
     {
-        $request->validate([
-            'from' => 'required|date_format:Y-m-d',
-            'to' => 'required|date_format:Y-m-d',
-            // Narrow the bandwidth series to one video and/or one tracking id. Both are matched
-            // against columns written from CDN access logs, so they are bound parameters in the
-            // service, never interpolated; the shapes below are what those columns can hold.
-            'video' => 'nullable|string|size:26|regex:/^[0-9A-HJKMNP-TV-Z]{26}$/',
-            'trackingId' => TrackingId::rules(),
-            // Which kind of delivery to report. Anything outside this list is refused rather than
-            // passed through: `usage_daily` also holds upload volume and encoding seconds in the same
-            // `value` column, and letting one of those names reach the bandwidth queries would
-            // report seconds as if they were bytes.
-            'metric' => ['nullable', 'string', Rule::in(UsageMetric::delivery())],
-            // How many rows each flat top-N list returns — `topIps`, `topVideos`, `topTrackingIds`
-            // and `topExternalUsers`. They were fixed at 10 with no way to see or widen it, so an
-            // account with more than ten of anything was reading a top 10 that looked like the
-            // whole breakdown. Capped at the batch endpoints' list size; past a few hundred rows
-            // those are the right endpoints anyway.
-            'limit' => 'nullable|integer|min:1|max:'.TrackingIdBytesQueryData::MAX_BATCH,
-            // `bandwidthByVideo` gets its own, and a smaller one: it is a time series, so its row
-            // count is this times the length of the range.
-            'videoSeriesLimit' => 'nullable|integer|min:1|max:100',
-        ]);
-
-        $from = $request->input('from');
-        $to = $request->input('to');
-        // Read straight off the attribute rather than through the `project()` macro, which aborts:
-        // this endpoint answers with a project and without one, and the difference is what it may
-        // show rather than whether it answers.
-        //
-        // Whatever project the caller named, and nothing else — no account fallback and no operator
-        // exception. `?user_id=` used to let anyone name an account here and read its upload volume
-        // and customer labels; there is now no account axis on this endpoint at all, which is a
-        // shorter way of saying the same fix.
-        $projectId = $request->attributes->get('resolved_project')?->id;
-        $video = $request->input('video');
-
-        // `has`, not `filled`: an empty string is the value traffic with no tracking id carries,
-        // so `?trackingId=` is a meaningful request — "show me only what was never attributed" —
-        // and must not be flattened into "no filter at all".
-        $trackingId = $request->has('trackingId') ? (string) $request->input('trackingId', '') : null;
-        $metric = $request->input('metric');
-        $limit = (int) $request->input('limit', AnalyticsService::TOP_N_DEFAULT);
-        // Whether the breakdowns that NAME things can be answered — viewer addresses, viewer
-        // labels, customer labels, video ULIDs. Narrowed to a project they are the caller's own;
-        // unnarrowed they would enumerate whoever else is on the installation, so they come back
-        // empty instead. The aggregates beside them name nobody and are always answered.
-        $identifiers = $projectId !== null;
-        $seriesLimit = (int) $request->input('videoSeriesLimit', AnalyticsService::SERIES_TOP_N_DEFAULT);
-
-        $encoding = $this->analyticsService->encodingUsage($from, $to);
-        $summary = $this->analyticsService->summary($from, $to, $video, $trackingId, $metric, $projectId);
-        $usage = $this->analyticsService->usageSummary($from, $to, $projectId);
+        $projectId = $this->projectId($request);
 
         return response()->json([
             'data' => new AnalyticsData(
-                // Keys, not English. A client maps these to its own words; the API has no opinion
-                // about what a card is called or in which language.
-                cards: AnalyticsCardData::collect([
-                    ['key' => 'total_bandwidth', 'value' => $summary['total_bytes'], 'unit' => MetricUnit::BYTES],
-                    ['key' => 'unique_ips', 'value' => $summary['unique_ips'], 'unit' => MetricUnit::COUNT],
-                    ['key' => 'active_videos', 'value' => $summary['unique_videos'], 'unit' => MetricUnit::COUNT],
-                    ['key' => 'tracking_ids', 'value' => $summary['unique_tracking_ids'], 'unit' => MetricUnit::COUNT],
-                    ['key' => 'nodes', 'value' => Node::count(), 'unit' => MetricUnit::COUNT],
-                    ['key' => 'cpu_encoding', 'value' => $encoding['cpu'], 'unit' => MetricUnit::SECONDS],
-                    ['key' => 'upload_volume', 'value' => $usage['upload_bytes'], 'unit' => MetricUnit::BYTES],
-                ]),
-                bandwidthOverTime: BandwidthPointData::collect($this->analyticsService->bandwidthOverTime($from, $to, $video, $trackingId, $metric, $projectId)),
-                // Empty without project context. A total is instance-wide and names nobody, which
-                // is the trade this endpoint has always documented; a LIST OF IDENTIFIERS is a
-                // different thing entirely — unnarrowed these enumerate other tenants' viewer
-                // addresses, viewer labels, customer labels and video ULIDs, and the limit that
-                // caps them is the caller's.
-                topIps: TopIpData::collect($identifiers ? $this->analyticsService->topIps($from, $to, limit: $limit, video: $video, trackingId: $trackingId, metric: $metric, projectId: $projectId) : []),
-                topVideos: TopVideoData::collect($identifiers ? $this->analyticsService->topVideos($from, $to, limit: $limit, video: $video, trackingId: $trackingId, metric: $metric, projectId: $projectId) : []),
-                topExternalUsers: TopExternalUserData::collect($identifiers ? $this->analyticsService->topExternalUsers($from, $to, $projectId, $limit) : []),
-                topTrackingIds: TopTrackingIdData::collect($identifiers ? $this->analyticsService->bandwidthByTrackingId($from, $to, limit: $limit, video: $video, trackingId: $trackingId, metric: $metric, projectId: $projectId) : []),
-                bandwidthByVideo: BandwidthByVideoData::collect($identifiers ? $this->analyticsService->bandwidthByVideo($from, $to, limit: $seriesLimit, video: $video, trackingId: $trackingId, metric: $metric, projectId: $projectId) : []),
-                encodingOverTime: EncodingPointData::collect($this->analyticsService->encodingUsageOverTime($from, $to)),
+                cards: $this->cardsFor($query, $projectId),
+                bandwidthOverTime: $this->bandwidthOverTimeFor($query, $projectId),
+                topIps: $this->topIpsFor($query, $projectId),
+                topVideos: $this->topVideosFor($query, $projectId),
+                topExternalUsers: $this->topExternalUsersFor($query, $projectId),
+                topTrackingIds: $this->topTrackingIdsFor($query, $projectId),
+                bandwidthByVideo: $this->bandwidthByVideoFor($query, $projectId),
+                encodingOverTime: EncodingPointData::collect($this->analyticsService->encodingUsageOverTime($query->from, $query->to)),
             ),
         ]);
+    }
+
+    /*
+     * One endpoint per dashboard panel, each answering exactly what its panel draws, so the page
+     * asks for all of them at once and shows each as it lands. Same query, same project rules
+     * and same payload pieces as `index()`.
+     */
+
+    public function summary(Request $request, DashboardQueryData $query): JsonResponse
+    {
+        return response()->json(['data' => $this->cardsFor($query, $this->projectId($request))]);
+    }
+
+    public function bandwidth(Request $request, DashboardQueryData $query): JsonResponse
+    {
+        return response()->json(['data' => $this->bandwidthOverTimeFor($query, $this->projectId($request))]);
+    }
+
+    public function topIps(Request $request, DashboardQueryData $query): JsonResponse
+    {
+        return response()->json(['data' => $this->topIpsFor($query, $this->projectId($request))]);
+    }
+
+    public function topVideos(Request $request, DashboardQueryData $query): JsonResponse
+    {
+        return response()->json(['data' => $this->topVideosFor($query, $this->projectId($request))]);
+    }
+
+    public function topTrackingIds(Request $request, DashboardQueryData $query): JsonResponse
+    {
+        return response()->json(['data' => $this->topTrackingIdsFor($query, $this->projectId($request))]);
+    }
+
+    public function topExternalUsers(Request $request, DashboardQueryData $query): JsonResponse
+    {
+        return response()->json(['data' => $this->topExternalUsersFor($query, $this->projectId($request))]);
+    }
+
+    /**
+     * Read straight off the attribute rather than through the `project()` macro, which aborts:
+     * these endpoints answer with a project and without one, and the difference is what they may
+     * show rather than whether they answer.
+     *
+     * Whatever project the caller named, and nothing else — no account fallback and no operator
+     * exception. `?user_id=` used to let anyone name an account here and read its upload volume
+     * and customer labels; there is now no account axis on these endpoints at all, which is a
+     * shorter way of saying the same fix.
+     */
+    private function projectId(Request $request): ?int
+    {
+        return $request->attributes->get('resolved_project')?->id;
+    }
+
+    /**
+     * A breakdown that NAMES things — viewer addresses, viewer labels, customer labels, video
+     * ULIDs — answered only with project context. A total is instance-wide and names nobody, which
+     * is the trade this endpoint has always documented; a LIST OF IDENTIFIERS is a different thing
+     * entirely — unnarrowed it enumerates other tenants', and the limit that caps it is the
+     * caller's. Without a project it comes back empty, and the read never runs.
+     *
+     * @param  callable(): array  $read
+     */
+    private function named(?int $projectId, callable $read): array
+    {
+        return $projectId === null ? [] : $read();
+    }
+
+    /** @return array<int, AnalyticsCardData> */
+    private function cardsFor(DashboardQueryData $query, ?int $projectId): array
+    {
+        $summary = $this->analyticsService->summary($query->from, $query->to, $query->video, $query->trackingIdFilter(), $query->metric, $projectId);
+        $encoding = $this->analyticsService->encodingUsage($query->from, $query->to);
+        $usage = $this->analyticsService->usageSummary($query->from, $query->to, $projectId);
+
+        // Keys, not English. A client maps these to its own words; the API has no opinion about
+        // what a card is called or in which language.
+        return AnalyticsCardData::collect([
+            ['key' => 'total_bandwidth', 'value' => $summary['total_bytes'], 'unit' => MetricUnit::BYTES],
+            ['key' => 'unique_ips', 'value' => $summary['unique_ips'], 'unit' => MetricUnit::COUNT],
+            ['key' => 'active_videos', 'value' => $summary['unique_videos'], 'unit' => MetricUnit::COUNT],
+            ['key' => 'tracking_ids', 'value' => $summary['unique_tracking_ids'], 'unit' => MetricUnit::COUNT],
+            ['key' => 'nodes', 'value' => Node::count(), 'unit' => MetricUnit::COUNT],
+            ['key' => 'cpu_encoding', 'value' => $encoding['cpu'], 'unit' => MetricUnit::SECONDS],
+            ['key' => 'upload_volume', 'value' => $usage['upload_bytes'], 'unit' => MetricUnit::BYTES],
+        ]);
+    }
+
+    /** @return array<int, BandwidthPointData> */
+    private function bandwidthOverTimeFor(DashboardQueryData $query, ?int $projectId): array
+    {
+        return BandwidthPointData::collect($this->analyticsService->bandwidthOverTime($query->from, $query->to, $query->video, $query->trackingIdFilter(), $query->metric, $projectId));
+    }
+
+    /** @return array<int, TopIpData> */
+    private function topIpsFor(DashboardQueryData $query, ?int $projectId): array
+    {
+        return $this->named($projectId, fn () => TopIpData::collect($this->analyticsService->topIps($query->from, $query->to, limit: $query->topN(), video: $query->video, trackingId: $query->trackingIdFilter(), metric: $query->metric, projectId: $projectId)));
+    }
+
+    /** @return array<int, TopVideoData> */
+    private function topVideosFor(DashboardQueryData $query, ?int $projectId): array
+    {
+        return $this->named($projectId, fn () => TopVideoData::collect($this->analyticsService->topVideos($query->from, $query->to, limit: $query->topN(), video: $query->video, trackingId: $query->trackingIdFilter(), metric: $query->metric, projectId: $projectId)));
+    }
+
+    /** @return array<int, TopTrackingIdData> */
+    private function topTrackingIdsFor(DashboardQueryData $query, ?int $projectId): array
+    {
+        return $this->named($projectId, fn () => TopTrackingIdData::collect($this->analyticsService->bandwidthByTrackingId($query->from, $query->to, limit: $query->topN(), video: $query->video, trackingId: $query->trackingIdFilter(), metric: $query->metric, projectId: $projectId)));
+    }
+
+    /** @return array<int, BandwidthByVideoData> */
+    private function bandwidthByVideoFor(DashboardQueryData $query, ?int $projectId): array
+    {
+        return $this->named($projectId, fn () => BandwidthByVideoData::collect($this->analyticsService->bandwidthByVideo($query->from, $query->to, limit: $query->seriesTopN(), video: $query->video, trackingId: $query->trackingIdFilter(), metric: $query->metric, projectId: $projectId)));
+    }
+
+    /** @return array<int, TopExternalUserData> */
+    private function topExternalUsersFor(DashboardQueryData $query, ?int $projectId): array
+    {
+        return $this->named($projectId, fn () => TopExternalUserData::collect($this->analyticsService->topExternalUsers($query->from, $query->to, $projectId, $query->topN())));
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\DTOs\TrackUploadMeta;
 use App\DTOs\UploadMeta;
 use App\Models\Project;
 use App\Models\User;
@@ -14,7 +15,7 @@ class UppyS3Service
         return FileService::generateKey($filename);
     }
 
-    public function storeUploadMeta(string $key, UploadMeta $meta): void
+    public function storeUploadMeta(string $key, UploadMeta|TrackUploadMeta $meta): void
     {
         Cache::put("upload_meta:{$key}", $meta, now()->addDays(7));
     }
@@ -24,7 +25,7 @@ class UppyS3Service
         return UploadMeta::fromRequest($user, $project, $input);
     }
 
-    public function getUploadMeta(string $key): ?UploadMeta
+    public function getUploadMeta(string $key): UploadMeta|TrackUploadMeta|null
     {
         return Cache::get("upload_meta:{$key}");
     }

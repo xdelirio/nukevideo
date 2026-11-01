@@ -2,14 +2,21 @@
 
 namespace App\Http\Controllers;
 
+use App\Data\Stream\UpdateStreamData;
+use App\DTOs\TrackUploadMeta;
+use App\DTOs\UploadMeta;
 use App\Enums\VideoPriority;
+use App\Jobs\OnVideoUploaded;
 use App\Models\Project;
+use App\Models\Video;
+use App\Services\TrackIngestService;
 use App\Services\UppyS3Service;
 use Aws\S3\S3Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Throwable;
 
 /*
@@ -22,8 +29,10 @@ class MyCustomUppyController extends Controller
 
     protected string $bucket;
 
-    public function __construct(protected UppyS3Service $uppyService)
-    {
+    public function __construct(
+        protected UppyS3Service $uppyService,
+        private TrackIngestService $trackIngest,
+    ) {
         $this->client = Storage::disk('s3')->getClient();
         $this->bucket = config('filesystems.disks.s3.bucket');
     }
@@ -32,9 +41,7 @@ class MyCustomUppyController extends Controller
     {
         $project = $this->resolveProject($request);
 
-        $this->validateMetadata($request, $project);
-
-        $key = $this->uppyService->generateKey($request->input('filename'));
+        [$key, $meta] = $this->prepareUpload($request, $project);
 
         $result = $this->client->createMultipartUpload([
             'Bucket' => $this->bucket,
@@ -42,10 +49,7 @@ class MyCustomUppyController extends Controller
             'ContentDisposition' => 'inline',
         ]);
 
-        $this->uppyService->storeUploadMeta(
-            $key,
-            $this->uppyService->buildUploadMeta($project->user, $project, $request->all()),
-        );
+        $this->uppyService->storeUploadMeta($key, $meta);
 
         return response()
             ->json([
@@ -58,14 +62,9 @@ class MyCustomUppyController extends Controller
     {
         $project = $this->resolveProject($request);
 
-        $this->validateMetadata($request, $project);
+        [$key, $meta] = $this->prepareUpload($request, $project);
 
-        $key = $this->uppyService->generateKey($request->input('filename'));
-
-        $this->uppyService->storeUploadMeta(
-            $key,
-            $this->uppyService->buildUploadMeta($project->user, $project, $request->all()),
-        );
+        $this->uppyService->storeUploadMeta($key, $meta);
 
         try {
             $cmd = $this->client->getCommand('PutObject', [
@@ -219,6 +218,85 @@ class MyCustomUppyController extends Controller
         }
 
         return $actor->projects()->where('ulid', $ulid)->firstOrFail();
+    }
+
+    /**
+     * Validate the upload and pick its key and metadata. `metadata.video` makes it a track for an
+     * already-processed video ({@see TrackUploadMeta}) rather than a new video. Both land in the
+     * same folder: the metadata is what tells them apart ({@see OnVideoUploaded}), so a
+     * bucket notification filtered on that folder keeps covering tracks.
+     *
+     * @return array{0: string, 1: UploadMeta|TrackUploadMeta}
+     */
+    private function prepareUpload(Request $request, Project $project): array
+    {
+        if ($request->filled('metadata.video')) {
+            $video = $this->validateTrackMetadata($request, $project);
+
+            return [
+                $this->uppyService->generateKey($request->input('filename')),
+                TrackUploadMeta::fromRequest($project->user, $project, $video, $request->all()),
+            ];
+        }
+
+        $this->validateMetadata($request, $project);
+
+        return [
+            $this->uppyService->generateKey($request->input('filename')),
+            $this->uppyService->buildUploadMeta($project->user, $project, $request->all()),
+        ];
+    }
+
+    /**
+     * Everything an added track can be refused for is checked here, before the upload starts: the
+     * file may be gigabytes of audio, and a refusal after the fact would only surface as a failed
+     * track. The ingest re-checks what can change in between ({@see TrackIngestService}).
+     */
+    private function validateTrackMetadata(Request $request, Project $project): Video
+    {
+        // @uppy/aws-s3 sends every metadata value through String(), so the panel's flags arrive as
+        // "true"/"false" — which the `boolean` rule refuses. Normalised first; anything else is
+        // left as sent, for the rule to judge.
+        $metadata = (array) $request->input('metadata', []);
+        foreach (['forced', 'hearingImpaired', 'visualImpaired'] as $flag) {
+            if (is_string($metadata[$flag] ?? null)) {
+                $metadata[$flag] = filter_var($metadata[$flag], FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? $metadata[$flag];
+            }
+        }
+        $request->merge(['metadata' => $metadata]);
+
+        $request->validate([
+            'filename' => 'required|string|max:255',
+            'metadata.video' => 'required|ulid',
+            'metadata.trackType' => ['required', Rule::in(array_keys(TrackIngestService::EXTENSIONS))],
+            // Not `name`/`type`: Uppy fills those meta fields with the file's own name and MIME type.
+            // Same criteria as editing a track: the name is written into the packager descriptor and
+            // the HLS master as plain text.
+            'metadata.trackName' => ['required', 'string', 'max:'.TrackIngestService::MAX_NAME_LENGTH, 'regex:'.UpdateStreamData::NAME_PATTERN],
+            'metadata.language' => ['required', ...UpdateStreamData::rules()['language']],
+            'metadata.forced' => 'nullable|boolean',
+            'metadata.hearingImpaired' => 'nullable|boolean',
+            'metadata.visualImpaired' => 'nullable|boolean',
+            'metadata.externalUserId' => 'nullable|string|max:255',
+        ]);
+
+        $video = $project->videos()->where('ulid', $request->input('metadata.video'))->firstOrFail();
+
+        $refusal = $this->trackIngest->refusal(
+            $video,
+            $request->input('metadata.trackType'),
+            $request->input('metadata.trackName'),
+            $request->boolean('metadata.forced'),
+            pathinfo((string) $request->input('filename'), PATHINFO_EXTENSION),
+        );
+
+        if ($refusal !== null) {
+            $field = $refusal['field'] === 'filename' ? 'filename' : "metadata.{$refusal['field']}";
+
+            throw ValidationException::withMessages([$field => $refusal['message']]);
+        }
+
+        return $video;
     }
 
     private function validateMetadata(Request $request, Project $project): void

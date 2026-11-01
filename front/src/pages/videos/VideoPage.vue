@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useRoute } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import VideoService from '@/services/VideoService'
 import { formatBytes } from '@/utils/byteFormatter'
 import StorageSize from '@/components/StorageSize.vue'
@@ -26,12 +26,13 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import StreamService from '@/services/StreamService'
-import { EditIcon, FileVideo, Radio, Box, Subtitles, PlayIcon, Clock, HardDrive, CalendarDays, Trash2 } from '@lucide/vue'
+import { EditIcon, FileVideo, Radio, Box, Subtitles, PlayIcon, Clock, HardDrive, CalendarDays, Trash2, Plus } from '@lucide/vue'
 import { formatSecondsToTime } from '@/utils/timeFormatter'
 import DeleteVideoButton from './components/DeleteVideoButton.vue'
 import RetryVideoButton from './components/RetryVideoButton.vue'
 import StreamItem from './components/StreamItem.vue'
 import EditStreamDialog from './components/EditStreamDialog.vue'
+import AddTrackDialog from './components/AddTrackDialog.vue'
 import { toast } from 'vue-sonner'
 import { ApiException } from '@/exceptions/ApiException'
 import ShakaVideoPlayer from './components/ShakaVideoPlayer.vue'
@@ -232,11 +233,20 @@ const getOutputSummary = (output: Output): string => {
 
 const terminalStatuses: App.Enums.VideoStatus[] = ['completed', 'failed']
 
+/**
+ * A finished upload only becomes a stream once the bucket webhook lands, a few seconds later, so
+ * the poll is kept alive for a while after one even though nothing is processing yet.
+ */
+let awaitingTrackUntil = 0
+
 const isStillProcessing = computed(() => {
   if (!video.value) return false
   if (!terminalStatuses.includes(video.value.status as VideoStatus)) return true
+  if (video.value.streams.some(s => s.status === 'processing')) return true
   return video.value.outputs.some(o => !terminalStatuses.includes(o.status))
 })
+
+const shouldPoll = () => isStillProcessing.value || Date.now() < awaitingTrackUntil
 
 let refreshInterval: number | null = null
 
@@ -263,7 +273,7 @@ const poll = async () => {
     await show()
     pollFailures = 0
 
-    if (!isStillProcessing.value) stopPolling()
+    if (!shouldPoll()) stopPolling()
   } catch {
     pollFailures++
 
@@ -276,7 +286,7 @@ const startPolling = () => {
   stopPolling()
   pollFailures = 0
 
-  if (video.value && isStillProcessing.value) {
+  if (video.value && shouldPoll()) {
     refreshInterval = setInterval(poll, 5000)
   }
 }
@@ -287,6 +297,23 @@ const onRetried = (updated: Video) => {
   video.value = updated
   startPolling()
 }
+
+const addTrackDialog = ref<InstanceType<typeof AddTrackDialog>>()
+
+const onTrackAdded = async () => {
+  awaitingTrackUntil = Date.now() + 60_000
+  await show()
+  startPolling()
+}
+
+/**
+ * An added audio track joins its outputs only once it is published, so until then — and for good
+ * if it fails — it belongs to no output card. Subtitles need no such list: every output card
+ * shows them all already.
+ */
+const pendingAudioTracks = computed(() =>
+  video.value?.streams.filter(s => s.type === 'audio' && (s.status === 'processing' || s.status === 'failed')) ?? []
+)
 
 /** Retry from the error screen: load again and re-arm the poll if the video is still working. */
 const reload = async () => {
@@ -332,6 +359,9 @@ onUnmounted(stopPolling)
             <!-- The only way back into the pipeline: dispatch only ever picks up a PENDING video,
                  and nothing puts a failed one back there on its own. -->
             <RetryVideoButton v-if="video.status === 'failed'" :id="video.ulid" @retried="onRetried" />
+            <Button v-if="video.status === 'completed'" variant="outline" size="sm" @click="addTrackDialog?.show()">
+              <Plus :size="14" class="mr-1" /> Add track
+            </Button>
             <!-- Disabled rather than hidden: the API refuses the same set, and a button that
                  vanishes mid-encode reads as a missing feature. -->
             <DeleteVideoButton :id="video.ulid" :disabled="!canDelete" />
@@ -373,6 +403,14 @@ onUnmounted(stopPolling)
               <Trash2 :size="13" />
             </Button>
           </div>
+        </div>
+        <div v-if="video.template" class="flex items-center justify-between py-2 border-b">
+          <span class="text-sm text-muted-foreground">Template</span>
+          <!-- The version it was encoded with, which later edits to the template do not change. -->
+          <RouterLink :to="`/templates/${video.template.ulid}`" class="flex items-center gap-1.5 text-sm font-semibold hover:underline truncate ml-2">
+            {{ video.template.name }}
+            <Badge v-if="video.template.version" variant="outline" class="text-[10px] px-1.5 py-0 font-normal">v{{ video.template.version }}</Badge>
+          </RouterLink>
         </div>
         <div class="flex items-center justify-between py-2 border-b">
           <span class="text-sm text-muted-foreground">Created</span>
@@ -508,7 +546,29 @@ onUnmounted(stopPolling)
       </div>
     </div>
 
+    <!-- Added audio tracks that belong to no output yet (processing) or never will (failed). -->
+    <Card v-if="pendingAudioTracks.length > 0">
+      <CardHeader class="pb-3">
+        <CardTitle class="text-base">Added tracks</CardTitle>
+      </CardHeader>
+      <CardContent class="pt-0">
+        <div class="border rounded-md divide-y overflow-hidden">
+          <StreamItem
+            v-for="stream in pendingAudioTracks"
+            :key="stream.ulid"
+            :stream="stream"
+            :codec-label="codecLabel"
+            :editable="canManageStreams"
+            :downloadable="false"
+            @on-deleted="() => onStreamDeleted(stream)"
+          />
+        </div>
+      </CardContent>
+    </Card>
+
     <EditStreamDialog ref="editStreamDialog" @updated="onStreamUpdated" />
+
+    <AddTrackDialog ref="addTrackDialog" :video-ulid="video.ulid" @added="onTrackAdded" />
 
     <!-- Edit Video Dialog -->
     <Dialog v-model:open="isEditDialogOpen">

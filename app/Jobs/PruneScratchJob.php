@@ -34,12 +34,35 @@ class PruneScratchJob implements ShouldQueue
      *  conservatively than internal scratch — a full day for any manual recovery/retry. */
     private const UPLOAD_GRACE_SECONDS = 86400; // 24 h
 
+    /** Twice an added track's job timeout ({@see AddTrackJob::$timeout}). */
+    private const TRACK_SCRATCH_MAX_AGE_SECONDS = 3600;
+
     public function handle(UppyS3Service $uploads): void
     {
         $this->pruneLocalScratch();
+        $this->pruneTrackScratch();
         $this->pruneChunkStore();
         $this->pruneUploadTmp($uploads);
         $this->pruneStaleMultipartUploads();
+    }
+
+    /**
+     * Scratch of added tracks ({@see AddTrackJob::SCRATCH_DIR}) left by a run killed before its own
+     * cleanup — a timeout ends the process outside any `finally`. A run recreates its directory on
+     * start, so anything older than one run's longest life is an orphan.
+     */
+    private function pruneTrackScratch(): void
+    {
+        $disk = Storage::disk('local');
+
+        foreach ($disk->directories(AddTrackJob::SCRATCH_DIR) as $dir) {
+            $modified = @filemtime($disk->path($dir));
+
+            if ($modified !== false && $modified < now()->subSeconds(self::TRACK_SCRATCH_MAX_AGE_SECONDS)->getTimestamp()) {
+                $disk->deleteDirectory($dir);
+                Log::info('Pruned orphaned track scratch', ['dir' => $dir]);
+            }
+        }
     }
 
     private function pruneLocalScratch(): void

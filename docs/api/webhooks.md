@@ -46,6 +46,7 @@ only the side effects.
 | `event` | string | See the table below. Treat an unknown value as "store `data` and carry on" — new events are additive. |
 | `timestamp` | integer | Unix seconds, taken when the delivery was queued. Second precision, so it is a rough ordering hint, not a sequence number. |
 | `data` | object | The full video, [as documented for `GET /api/videos/{ulid}`](/api/videos#get-video). |
+| `tracks` | string[] | Only on `video.track_ready` and `video.track_failed`: the ULIDs of the streams the upload became. |
 
 ### Events
 
@@ -55,6 +56,8 @@ only the side effects.
 | `video.updated` | The video's own fields (`name`, `priority`, `externalUserId`, `externalResourceId` through `PUT\|PATCH /api/videos/{ulid}`) changed — at any point — or one of its tracks (`PUT\|PATCH /api/streams/{ulid}`, `DELETE /api/streams/{ulid}`) changed after the run finished (`completed` or `failed`), including the `original` being reclaimed. A track change sends the **whole video**, like every other event. Never sent for the writes a run performs on its own — those end in `video.completed` or `video.error`. |
 | `video.completed` | Every output reached a terminal state and at least one succeeded. |
 | `video.error` | The video failed — either every output failed, or a pipeline failure (a stalled worker, an unreachable source) ended the run. |
+| `video.track_ready` | A track [added to the processed video](/api/streams#add-a-track) was published: it is in the manifests now. `tracks` lists its streams (more than one when the audio ladder split it). |
+| `video.track_failed` | Adding a track failed; the manifests are untouched. The reason is in that stream's `errorLog`. |
 | `video.deleted` | The video was deleted. Only sent for videos that carry an `externalResourceId`. The payload is the video as it was just before deletion. |
 
 ### Delivery

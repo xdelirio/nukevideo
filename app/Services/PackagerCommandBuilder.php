@@ -2,9 +2,11 @@
 
 namespace App\Services;
 
+use App\Jobs\AddTrackJob;
 use App\Jobs\PackageVideoJob;
 use App\Models\Output;
 use App\Models\Stream;
+use InvalidArgumentException;
 
 /**
  * Builds the shaka-packager argv for one output: every rendition becomes a CMAF stream sharing
@@ -20,10 +22,22 @@ class PackagerCommandBuilder
 
     public const SUBS_HLS_MANIFEST = '_subs.m3u8';
 
+    /** Throwaway manifests of a single-track audio run ({@see buildAudio}); underscored for the same
+     *  reason as the subtitle ones. */
+    public const AUDIO_DASH_MANIFEST = '_audio.mpd';
+
+    public const AUDIO_HLS_MANIFEST = '_audio.m3u8';
+
     public function __construct(
         private string $bin,
         private int $segmentDuration,
     ) {}
+
+    /** The builder every packager run uses: the configured binary and segment duration. */
+    public static function fromConfig(): self
+    {
+        return new self((string) config('packager.bin'), (int) config('packager.segment_duration'));
+    }
 
     /**
      * Build one packager run. `$cap` names the manifest set: null is the full master, a height
@@ -58,6 +72,47 @@ class PackagerCommandBuilder
             $args[] = '--generate_static_live_mpd';
             $args[] = '--mpd_output';
             $args[] = "{$outputDir}/".$output->manifestFile('dash', $cap);
+        }
+
+        return $args;
+    }
+
+    /**
+     * Package audio tracks on their own, in ONE format, for a video whose manifests are already
+     * published ({@see AddTrackJob}). The segments land exactly where the main run puts
+     * them (`{ulid}/init.mp4`, `{ulid}/$Number$.m4s`, `{ulid}/index.m3u8`), with the same segment
+     * duration; only the manifest is a throwaway, whose entries are grafted into the real ones
+     * ({@see ManifestEditor::hlsAddAudio}, {@see ManifestEditor::importDashAudio}). One format per
+     * run because each published output has its own set: a DASH-only output must not be handed an
+     * HLS rendition list it never serves.
+     *
+     * @param  list<array{path:string,type:string,ulid:string,language?:?string,hearing_impaired?:bool,visual_impaired?:bool,name?:?string}>  $inputs
+     * @return list<string>
+     */
+    public function buildAudio(array $inputs, string $outputDir, string $format): array
+    {
+        $args = [$this->bin];
+
+        foreach ($inputs as $input) {
+            if ($input['type'] !== 'audio') {
+                throw new InvalidArgumentException("buildAudio packages audio only, got {$input['type']}");
+            }
+
+            $args[] = $this->streamDescriptor($input, $outputDir, [$format]);
+        }
+
+        $args[] = '--segment_duration';
+        $args[] = (string) $this->segmentDuration;
+
+        if ($format === 'hls') {
+            $args[] = '--hls_master_playlist_output';
+            $args[] = "{$outputDir}/".self::AUDIO_HLS_MANIFEST;
+            $args[] = '--hls_playlist_type';
+            $args[] = 'VOD';
+        } else {
+            $args[] = '--generate_static_live_mpd';
+            $args[] = '--mpd_output';
+            $args[] = "{$outputDir}/".self::AUDIO_DASH_MANIFEST;
         }
 
         return $args;

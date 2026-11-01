@@ -57,14 +57,18 @@ function selectDisks(array $inventory, array $chosen = []): array
     ];
 }
 
+/** Production as deployed: served over HTTPS, which is what puts TLS on the edge ({@see Node::proxyScheme}). */
 function inProduction(): void
 {
     app()->detectEnvironment(fn () => 'production');
+    config(['app.url' => 'https://api.example.com']);
 }
 
+/** A development panel on plain HTTP — pinned, so the suite never follows the developer's own .env. */
 function inDevelopment(): void
 {
     app()->detectEnvironment(fn () => 'local');
+    config(['app.url' => 'http://api.nukevideo.localhost']);
     // A development deploy pulls `node-dev` from a registry, and is refused without one.
     config(['nuke.registry' => '10.0.0.240:5000']);
 }

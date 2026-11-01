@@ -16,10 +16,14 @@ class EncodeCommandBuilder
      * `[start, end)` frame-accurately (a `-c copy` extract can't — it snaps back to the previous
      * keyframe and the windows overlap). Omit them for audio/subtitle sidecars (whole source).
      *
+     * `$fitDuration` fits every audio output to exactly that many seconds — silence padded onto a
+     * short source, a long one cut — for a track added to a video whose timeline is already fixed
+     * ({@see AddTrackService}).
+     *
      * @param  Collection<int,Stream>  $streams
      * @param  array<int,string>  $outputPaths  stream id → local output path
      */
-    public static function build(Collection $streams, string $source, array $outputPaths, ?float $start = null, ?float $end = null, ?array $gapFill = null): string
+    public static function build(Collection $streams, string $source, array $outputPaths, ?float $start = null, ?float $end = null, ?array $gapFill = null, ?float $fitDuration = null): string
     {
         $types = $streams->pluck('type')->unique();
 
@@ -52,11 +56,23 @@ class EncodeCommandBuilder
 
             $parts[] = match ($stream->type) {
                 'video' => sprintf('-fps_mode passthrough %s -f %s "%s"', $svc->buildVideoArguments($windowed, $gapFill), $svc->outputFormat(), $path),
-                'audio' => sprintf('%s -movflags +faststart -f %s "%s"', $svc->buildAudioArguments(), $svc->outputFormat(), $path),
+                'audio' => sprintf('%s%s -movflags +faststart -f %s "%s"', $svc->buildAudioArguments(), self::fit($fitDuration), $svc->outputFormat(), $path),
                 'subtitle' => sprintf('-map %s -c:s webvtt -f %s "%s"', $svc->mapTarget(), $svc->outputFormat(), $path),
             };
         }
 
         return implode(' ', $parts);
+    }
+
+    /** `-af apad … -t …` for {@see build}'s `$fitDuration`; nothing without one. */
+    private static function fit(?float $duration): string
+    {
+        if ($duration === null) {
+            return '';
+        }
+
+        $length = sprintf('%.3f', $duration);
+
+        return " -af apad=whole_dur={$length} -t {$length}";
     }
 }

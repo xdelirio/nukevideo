@@ -14,6 +14,9 @@ class TemplateData extends Data
         public array $query,
         // Disabled templates stay listed in the panel but are no longer offered to new uploads.
         public bool $enabled,
+        /** The current version of the encoding definition; every change to `query` adds one, and
+         *  each video keeps the version it was uploaded with. */
+        public int $version,
         public bool $keepProcessedFiles,
         public bool $keepOriginal,
         /** @var string[] */
@@ -29,6 +32,7 @@ class TemplateData extends Data
             name: $template->name,
             query: $template->query ?? [],
             enabled: (bool) $template->enabled,
+            version: $template->currentVersion?->version ?? 1,
             keepProcessedFiles: (bool) $template->keep_processed_files,
             keepOriginal: (bool) $template->keep_original,
             commands: $template->buildCommands(),

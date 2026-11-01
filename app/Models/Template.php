@@ -2,19 +2,21 @@
 
 namespace App\Models;
 
-use App\Services\ChunkTranscodeService;
+use App\Models\Concerns\ReadsEncodingQuery;
 use App\Services\Concerns\BuildsArguments;
+use App\Services\OnVideoUploadedService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Spatie\EloquentSortable\Sortable;
 use Spatie\EloquentSortable\SortableTrait;
 
 class Template extends Model implements Sortable
 {
-    use BuildsArguments, SortableTrait;
+    use BuildsArguments, ReadsEncodingQuery, SortableTrait;
 
     /** Marker for "encodes on the CPU queue", the counterpart of a node's GPU accel. */
     public const CPU = 'cpu';
@@ -59,6 +61,69 @@ class Template extends Model implements Sortable
         static::creating(function ($model) {
             $model->ulid = (string) Str::ulid();
         });
+
+        // Every way a template comes to exist or changes its encoding — the endpoints, a preset,
+        // a duplicate, a seeder — goes through here, so none of them can skip a version.
+        static::saved(function (Template $template) {
+            // `wasRecentlyCreated` stays true for the instance's whole life, so on its own it would
+            // cut a version on every later save of the model that created it.
+            if ($template->wasRecentlyCreated && ! $template->current_version_id) {
+                $template->cutVersion($template->query);
+
+                return;
+            }
+
+            if ($template->wasChanged('query')) {
+                // A template from before versions existed, edited before the backfill reached it:
+                // its videos were encoded with the query this edit replaces, so that one is kept
+                // as version 1 rather than lost.
+                if (! $template->current_version_id) {
+                    $template->cutVersion($template->getOriginal('query'));
+                }
+
+                $template->cutVersion($template->query);
+            }
+        });
+    }
+
+    /**
+     * The version an upload made now is pinned to, cut on the spot for a template that predates
+     * versions and has not been backfilled: pinning must not wait for an operator.
+     */
+    public function ensureCurrentVersion(): TemplateVersion
+    {
+        if (! $this->current_version_id) {
+            $this->cutVersion($this->query);
+        }
+
+        return $this->currentVersion()->firstOrFail();
+    }
+
+    /**
+     * Record `$query` as the next immutable version and make it current. The pointer is
+     * written without events: it is bookkeeping of this very save, not an edit of its own.
+     */
+    private function cutVersion(?array $query): void
+    {
+        DB::transaction(function () use ($query) {
+            $version = $this->versions()->create([
+                'version' => (int) $this->versions()->lockForUpdate()->max('version') + 1,
+                'query' => $query ?? [],
+            ]);
+
+            $this->forceFill(['current_version_id' => $version->id])->saveQuietly();
+        });
+    }
+
+    public function versions(): HasMany
+    {
+        return $this->hasMany(TemplateVersion::class);
+    }
+
+    /** The version an upload made now is pinned to ({@see OnVideoUploadedService}). */
+    public function currentVersion(): BelongsTo
+    {
+        return $this->belongsTo(TemplateVersion::class, 'current_version_id');
     }
 
     public function user(): BelongsTo
@@ -79,52 +144,6 @@ class Template extends Model implements Sortable
     public function scopeFindOrFailByUlid(Builder $query, $ulid)
     {
         return $query->where('ulid', $ulid)->firstOrFail();
-    }
-
-    /**
-     * GPU families this template's outputs encode on, empty for an all-CPU template.
-     *
-     * @return list<string>
-     */
-    public function accels(): array
-    {
-        return array_values(array_diff($this->capacities(), [self::CPU]));
-    }
-
-    /**
-     * Hardware each output encodes on: a GPU family, or CPU.
-     *
-     * @return list<string>
-     */
-    public function capacities(): array
-    {
-        return collect($this->query['outputs'] ?? [])
-            ->map(fn (array $output) => ChunkTranscodeService::accelForCodec($output['video_codec'] ?? null) ?? self::CPU)
-            ->unique()
-            ->values()
-            ->all();
-    }
-
-    /**
-     * First hardware this template needs that no active worker node provides, or null. Chunks are
-     * routed per hardware ({@see Stream::encodeQueue}), so a missing family — CPU included, since
-     * GPU nodes never drain the CPU queue — leaves the video hanging until the reaper.
-     */
-    public function missingCapacity(): ?string
-    {
-        foreach ($this->capacities() as $capacity) {
-            $nodes = Node::worker()->active();
-
-            $available = $capacity === self::CPU
-                ? $nodes->whereNull('accel')->exists()
-                : $nodes->where('accel', $capacity)->exists();
-
-            if (! $available) {
-                return $capacity;
-            }
-        }
-
-        return null;
     }
 
     /** Preview ffmpeg commands for each output variant of this template. */

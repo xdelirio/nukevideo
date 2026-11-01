@@ -1,9 +1,11 @@
 <?php
 
+use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Project;
 use App\Models\Stream;
 use App\Models\Template;
 use App\Models\Video;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 /*
@@ -219,4 +221,43 @@ function hlsFixture(array $ulids): string
         #EXT-X-STREAM-INF:BANDWIDTH=3050279,AVERAGE-BANDWIDTH=3050279,CODECS="av01.0.08M.08",RESOLUTION=1920x800,FRAME-RATE=24.000,AUDIO="audio",SUBTITLES="subs",CLOSED-CAPTIONS=NONE
         {video}/index.m3u8
         M3U8, $ulids);
+}
+
+/**
+ * Play an `s5cmd sync <local dir>/ s3://bucket/<prefix>/` against the faked `s3` disk, honouring
+ * the `--include`/`--exclude` globs the typed sync passes ({@see SyncsViaS5cmd}).
+ * Returns false for anything that is not such a sync, so a Process::fake closure can fall through.
+ *
+ * @param  string|list<string>  $command
+ */
+function fakeS5cmdSync(string|array $command): bool
+{
+    if (! is_array($command) || ($command[0] ?? null) !== 's5cmd' || ! in_array('sync', $command, true)) {
+        return false;
+    }
+
+    $source = rtrim($command[count($command) - 2], '/');
+    $dest = preg_replace('#^s3://[^/]+/#', '', rtrim(end($command), '/'));
+    $include = [];
+    $exclude = [];
+
+    foreach ($command as $i => $arg) {
+        if ($arg === '--include') {
+            $include[] = $command[$i + 1];
+        } elseif ($arg === '--exclude') {
+            $exclude[] = $command[$i + 1];
+        }
+    }
+
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS)) as $file) {
+        $name = $file->getFilename();
+        $wanted = ($include === [] || collect($include)->contains(fn ($glob) => fnmatch($glob, $name)))
+            && ! collect($exclude)->contains(fn ($glob) => fnmatch($glob, $name));
+
+        if ($wanted) {
+            Storage::disk('s3')->put($dest.'/'.substr($file->getPathname(), strlen($source) + 1), file_get_contents($file->getPathname()));
+        }
+    }
+
+    return true;
 }

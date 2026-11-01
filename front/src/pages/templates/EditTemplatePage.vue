@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
@@ -27,6 +28,8 @@ const isEdit = computed(() => !!route.params.id)
 const pageTitle = computed(() => isEdit.value ? 'Edit Template' : 'Create Template')
 
 const templateName = ref('')
+/** The current encoding version; null while creating. Saving an encoding change cuts the next one. */
+const version = ref<number | null>(null)
 const enabled = ref(true)
 const keepProcessedFiles = ref(true)
 const keepOriginal = ref(false)
@@ -72,6 +75,7 @@ const loadTemplate = async () => {
   try {
     const template: Template = await TemplateService.show(route.params.id as string)
     templateName.value = template.name
+    version.value = template.version
     enabled.value = template.enabled ?? true
     keepProcessedFiles.value = template.keepProcessedFiles ?? true
     keepOriginal.value = template.keepOriginal ?? false
@@ -161,9 +165,17 @@ onMounted(async () => {
           <ArrowLeft :size="20" />
         </Button>
         <div>
-          <h1 class="text-2xl font-bold">{{ pageTitle }}</h1>
+          <div class="flex items-center gap-2">
+            <h1 class="text-2xl font-bold">{{ pageTitle }}</h1>
+            <Badge v-if="version" variant="outline" class="font-normal">v{{ version }}</Badge>
+          </div>
           <p class="text-sm text-muted-foreground">
             Configure encoding parameters for your video template
+          </p>
+          <!-- Videos pin the version they were uploaded with: an edit only reaches new uploads. -->
+          <p v-if="version" class="text-xs text-muted-foreground mt-1">
+            Saving changes to the encoding settings creates v{{ version + 1 }}. Existing videos keep
+            the version they were encoded with, including when retried or given new tracks.
           </p>
         </div>
       </div>

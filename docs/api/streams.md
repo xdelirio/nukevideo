@@ -2,7 +2,8 @@
 
 Streams represent individual encoded tracks of a video (video, audio, subtitle, or the original file).
 
-Streams are created by the pipeline when a video is ingested, not through the API.
+Streams are created by the pipeline when a video is ingested. Audio and subtitle tracks can also be
+[added to a video that already finished processing](#add-a-track).
 
 ## Update Stream
 
@@ -28,7 +29,7 @@ PUT|PATCH /api/streams/{ulid}
 | Field | Type | Notes |
 |-------|------|-------|
 | `name` | string | **Required.** Shown in the player's track selector. Must be unique among the video's tracks of the same type, and cannot contain `,`, `"` or a line break. |
-| `language` | string \| null | **Required**, but nullable. BCP-47 (`es`, `en-US`, `es-MX`), and it must be a language that exists — the packager normalizes it, so a manifest may show `en` for a source tagged `eng`. |
+| `language` | string \| null | **Required**, but nullable. BCP-47 (`es`, `en-US`, `es-MX`), and it must be a language that exists — the packager normalizes it, so a manifest may show `en` for a source tagged `eng`. The codes that name no language are accepted as well: `und`, `mul`, `zxx`, `mis` and `qaa`–`qtz`. |
 | `forced` | boolean | **Required**, on every stream. Takes effect on subtitles only — marks a track that carries foreign-language dialogue; on audio it is stored and changes nothing. |
 | `hearingImpaired` | boolean \| null | Optional, **subtitles only** — a `true` on an audio track is a `422`, because audio SDH is baked into the packaged manifests. Omit it (or send `null`) to keep whatever the probe or a previous edit set. Stored in the stream's `meta`, and returned lifted out of it as `hearingImpaired`. |
 
@@ -109,6 +110,81 @@ Responds `422` for the original file, `409` while the video is still processing,
 track was not retained (a template with `keepProcessedFiles` off discards the renditions before they
 reach storage) or belongs to another project, and `503` when no delivery node is available.
 
+## Add a Track
+
+Add an **audio or subtitle** file to a video that is already `completed`. Only the new track is
+encoded and packaged; it is then grafted into the published DASH and HLS manifests, so the video
+keeps playing throughout and nothing else is re-encoded.
+
+There is no `POST` with the file in it. The file goes straight to storage through the same
+[S3 upload endpoints](/api/videos#s3-multipart-upload) a video uses, with `metadata.video` instead
+of `metadata.template`:
+
+```json
+{
+  "filename": "dub-en.wav",
+  "metadata": {
+    "project": "01ABD...",
+    "video": "01ABC...",
+    "trackType": "audio",
+    "trackName": "English (dub)",
+    "language": "en",
+    "visualImpaired": false,
+    "hearingImpaired": false
+  }
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `filename` | string | **Required.** Its extension has to match `trackType`: audio takes `wav`, `mp3`, `m4a`, `aac`, `flac`, `ogg`, `opus`, `mka`, `mp4`, `mkv`, `mov`, `webm`, `ac3`, `eac3` (the first audio stream of the file is used); subtitles take `srt`, `vtt`, `ass`, `ssa`. |
+| `metadata.project` | string | **Required.** As for a video upload. |
+| `metadata.video` | string | **Required.** ULID of a `completed` video of that project. |
+| `metadata.trackType` | string | **Required.** `audio` or `subtitle`. Not `type`: Uppy fills that field with the file's MIME type. |
+| `metadata.trackName` | string | **Required.** Up to 240 characters — room for the layout suffix a ladder adds. Same rules as `name` in [Update Stream](#update-stream): unique among the video's tracks of that type, no `,`, `"` or line break. Not `name`, for the same reason as above. |
+| `metadata.language` | string | **Required.** BCP-47, as in [Update Stream](#update-stream). `und` (unknown), `mul` (several), `zxx` (no speech — music, effects) and `qaa`–`qtz` (local use, e.g. a commentary) are accepted too. |
+| `metadata.forced` | boolean | Optional, subtitles only. |
+| `metadata.hearingImpaired` | boolean | Optional. SDH subtitles, or a dialogue-enhanced audio mix. |
+| `metadata.visualImpaired` | boolean | Optional, audio only. An audio-description track. |
+| `metadata.externalUserId` | string | Optional. Usage is recorded under it; the video's own when omitted. |
+
+Everything the upload could be refused for is checked when it is created — before any byte is
+sent — and answered with a `422`: a video that is not `completed`, a taken name, an extension that
+does not match the type, or an audio track for a video none of whose outputs carries audio in its
+template. A video of another project is a `404`.
+
+Once the upload completes, the track shows up in the video's `streams` with `status: "processing"`,
+and moves to `ready` (or `failed`, with the reason in `errorLog`) on its own. Your webhook gets
+[`video.track_ready` or `video.track_failed`](/api/webhooks#events) either way — including when the
+upload is refused as it lands (the video was retried meanwhile, or the name was taken). The
+uploaded file is deleted once the track is ready or has failed; a failed track never retries, so
+upload it again. A track whose processing stops without an outcome — say, a lost worker — is
+failed automatically after about seven hours.
+
+**How the track is encoded:**
+
+- **Audio** is encoded the way the video's template encodes audio, output by output: same codec,
+  same channel ladder, same bitrate cap. A 5.1 file under a template with a stereo and a 5.1 rung
+  therefore becomes **two** streams, named with a `(Stereo)` / `(5.1)` suffix; they succeed or fail
+  together, and the suffixed names must be free too. The settings are those of the template
+  **version** the video was encoded with: editing the template since changes nothing for it. An
+  Opus track is only added to DASH manifests, as at ingest.
+- **Audio is fitted to the video's duration**: padded with silence when shorter, cut when longer.
+  A file that differs from the video by more than **2 seconds or 1%**, whichever is larger
+  (72 seconds on a two-hour film), is refused (`failed`) as almost certainly another cut. So is a
+  file whose length cannot be read. Timing is taken as is from `0`; there is no offset. Only the
+  file's first audio stream is used.
+- **Subtitles** are converted to WebVTT and added to every output. UTF-8, UTF-16 (with a byte-order
+  mark) and Windows-1252/Latin-1 files are all read correctly. A file with no cues fails, and so
+  does one whose cues all start after the video ends. ASS/SSA styling and positioning are dropped:
+  WebVTT carries the text.
+
+While a track is `processing` it cannot be edited or deleted (`409`). A `failed` track can be
+deleted. A `ready` one is an ordinary stream: edit, download and delete it like any other.
+
+Players may take a moment to see the new track: self-hosted delivery edges cache manifests for
+about 30 seconds; with Bunny, the manifest's cache TTL applies.
+
 ## Delete Stream
 
 Removes one track from an already-packaged video: the CMAF segments are deleted and the track is
@@ -118,10 +194,11 @@ edited out of the published manifests, so playback stops offering it without a r
 DELETE /api/streams/{ulid}
 ```
 
-Responds `400` while the video is still processing, and `400` when the track is the last video
+Responds `400` while the video is still processing, `409` while the track itself is still being
+[added](#add-a-track), and `400` when the track is the last video
 rendition of any output — that would leave the output's published manifests with no video at all.
-Deleting a track does **not** notify your webhook, so a mirrored copy of the video has to be
-refreshed from the response or from [Get Video](/api/videos#get-video).
+Deleting a track notifies your webhook with [`video.updated`](/api/webhooks#events), carrying the
+video without it.
 
 ## Stream Types
 
@@ -139,6 +216,7 @@ refreshed from the response or from [Get Video](/api/videos#get-video).
 | `ulid` | string | Unique identifier. Not stable across a re-probe: `videos:retry --reprobe` drops the derived streams and mints new ULIDs. |
 | `name` | string \| null | Display name. `null` on video renditions — they carry no label anywhere, the panel shows their height instead. |
 | `type` | string | `original`, `video`, `audio` or `subtitle` |
+| `status` | string \| null | Only set on a track [added after processing](#add-a-track): `processing`, `ready` or `failed`. `null` on every stream the video's own run created — those are ready once the video is. |
 | `width` | integer \| null | Video width in pixels |
 | `height` | integer \| null | Video height in pixels |
 | `packageSize` | integer \| null | Bytes of the packaged CMAF segments — what serves playback. `null` on the `original`, which is never packaged. |

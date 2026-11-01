@@ -30,5 +30,13 @@
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
         <env name="MAXMIND_DATABASE" value="/nonexistent/geoip.mmdb"/>
+        <!-- A bucket and credentials of the suite's own, so nothing follows the developer's .env:
+             CI copies .env.example, whose bucket is empty. Nothing is ever sent with them — the
+             disks are faked and presigning is local — but the upload controller types the bucket
+             as a string and `s3://<bucket>/` paths need one to parse. -->
+        <env name="AWS_ACCESS_KEY_ID" value="test"/>
+        <env name="AWS_SECRET_ACCESS_KEY" value="test"/>
+        <env name="AWS_DEFAULT_REGION" value="us-east-1"/>
+        <env name="AWS_BUCKET" value="nukevideo-test"/>
     </php>
 </phpunit>

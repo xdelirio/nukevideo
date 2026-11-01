@@ -6,6 +6,7 @@ use App\Jobs\PrepareVideoJob;
 use App\Models\Video;
 use App\Services\Concerns\DetectsStreamCopy;
 use App\Services\Concerns\ResolvesRateControl;
+use App\Support\Bitrate;
 use Exception;
 use FFMpeg\FFProbe;
 use FFMpeg\FFProbe\DataMapping\Format;
@@ -55,10 +56,12 @@ class CreateVideoStreamsService
 
     public function handle(Video $video, string $localPath): void
     {
-        $outputs = $video->template->query['outputs'] ?? [];
+        // The version pinned at ingest, never the template as edited since: a retry or re-probe
+        // must encode what the first run did.
+        $outputs = $video->encodingQuery()['outputs'] ?? [];
 
         if (empty($outputs)) {
-            throw new Exception("No outputs configured for template {$video->template->ulid}");
+            throw new Exception("No outputs configured for template {$video->template?->ulid}");
         }
 
         $this->trackMeta = $this->probeContainerTracks($localPath);
@@ -266,7 +269,9 @@ class CreateVideoStreamsService
         array $outputConfig,
         int $index,
     ): void {
-        $output = $video->outputs()->create();
+        // The index is what lets a track added after completion find this output's audio block
+        // again ({@see TrackParamsResolver}).
+        $output = $video->outputs()->create(['template_index' => $index]);
         $sourceVideo = $streamCollection->videos()->first();
 
         $videoIds = $this->resolveVideoStreams(
@@ -280,7 +285,7 @@ class CreateVideoStreamsService
         // zero video streams; PackageVideoJob only discovers that deep into packaging, as an empty
         // input list to shaka-packager. Fail loudly here instead.
         if (empty($videoIds)) {
-            throw new Exception("Output {$index} resolved no video renditions from template {$video->template->ulid}");
+            throw new Exception("Output {$index} resolved no video renditions from template {$video->template?->ulid}");
         }
 
         $audioConfig = $outputConfig['audio'] ?? [];
@@ -343,7 +348,7 @@ class CreateVideoStreamsService
         foreach ($ladder as $variantConfig) {
             // Part of the identity: the same parameters tone-mapped in one output and kept HDR in
             // another are two different encodes, and must not be shared.
-            $key = $this->streamSignature($variantConfig).($toneMap ? ':tone-map' : '');
+            $key = self::streamSignature($variantConfig).($toneMap ? ':tone-map' : '');
 
             if (! isset($this->videoStreamCache[$key])) {
                 $stream = $this->createStream(
@@ -393,37 +398,19 @@ class CreateVideoStreamsService
      */
     private function getOrCreateAudioStreams(Video $video, StreamCollection $streamCollection, array $audioConfig): array
     {
-        $ladder = collect($audioConfig['channels'] ?? [])
-            ->sortBy(fn (array $config) => (int) ($config['channels'] ?? PHP_INT_MAX))
-            ->values();
-        $sharedAudioParams = collect($audioConfig)->except('channels')->toArray();
-
         $streamIds = [];
 
         foreach ($streamCollection->audios() as $stream) {
-            $sourceChannels = max(1, (int) $stream->get('channels'));
+            $rungs = self::audioRungs(
+                $audioConfig,
+                max(1, (int) $stream->get('channels')),
+                $stream->get('codec_name'),
+                $stream->get('profile'),
+                self::statedBitRate($stream),
+            );
 
-            // Keyed by resolved count: the first (nominally smallest) entry wins each rung.
-            $rungs = [];
-            foreach ($ladder as $config) {
-                $channels = min((int) ($config['channels'] ?? 0) ?: $sourceChannels, $sourceChannels);
-                $rungs[$channels] ??= $config;
-            }
-
-            // No cap against a source more efficient than the target: HE-AAC or Opus matched
-            // bit for bit in AAC-LC would sound worse than what came in, the same reason the video
-            // ceiling skips a source codec that outranks the target's.
-            $sourceRate = self::audioCodecRank($stream->get('codec_name'), $stream->get('profile'))
-                > self::audioCodecRank($sharedAudioParams['audio_codec'] ?? null, $sharedAudioParams['audio_profile'] ?? null)
-                ? null
-                : self::statedBitRate($stream);
-
-            foreach ($rungs as $channels => $config) {
-                $inputParams = self::capAudioBitrateToSource(
-                    array_merge($sharedAudioParams, $config, ['channels' => (string) $channels]),
-                    $sourceRate,
-                );
-                $key = $stream->get('index').':'.$this->streamSignature($inputParams);
+            foreach ($rungs as $channels => $inputParams) {
+                $key = $stream->get('index').':'.self::streamSignature($inputParams);
 
                 if (! isset($this->audioStreamCache[$key])) {
                     $created = $this->createStream(
@@ -447,6 +434,48 @@ class CreateVideoStreamsService
     }
 
     /**
+     * The resolved encode parameters of every rung one source track gets from a template's `audio`
+     * block, keyed by resolved channel count ({@see getOrCreateAudioStreams} for the ladder's
+     * semantics). Public because a track added after the video completed goes through the very same
+     * resolution ({@see TrackParamsResolver}).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function audioRungs(array $audioConfig, int $sourceChannels, ?string $sourceCodec, ?string $sourceProfile, ?int $sourceRate): array
+    {
+        $ladder = collect($audioConfig['channels'] ?? [])
+            ->sortBy(fn (array $config) => (int) ($config['channels'] ?? PHP_INT_MAX))
+            ->values();
+        $sharedAudioParams = collect($audioConfig)->except('channels')->toArray();
+        $sourceChannels = max(1, $sourceChannels);
+
+        // Keyed by resolved count: the first (nominally smallest) entry wins each rung.
+        $rungs = [];
+        foreach ($ladder as $config) {
+            $channels = min((int) ($config['channels'] ?? 0) ?: $sourceChannels, $sourceChannels);
+            $rungs[$channels] ??= $config;
+        }
+
+        // No cap against a source more efficient than the target: HE-AAC or Opus matched
+        // bit for bit in AAC-LC would sound worse than what came in, the same reason the video
+        // ceiling skips a source codec that outranks the target's.
+        $cap = self::audioCodecRank($sourceCodec, $sourceProfile)
+            > self::audioCodecRank($sharedAudioParams['audio_codec'] ?? null, $sharedAudioParams['audio_profile'] ?? null)
+            ? null
+            : $sourceRate;
+
+        $resolved = [];
+        foreach ($rungs as $channels => $config) {
+            $resolved[$channels] = self::capAudioBitrateToSource(
+                array_merge($sharedAudioParams, $config, ['channels' => (string) $channels]),
+                $cap,
+            );
+        }
+
+        return $resolved;
+    }
+
+    /**
      * A re-encode must not outweigh its source, audio included: the template's 128k Opus over a
      * 96 kbps mono AC3 track shipped a track a third heavier than the one it came from, and a 96k
      * AAC stereo one grew by a quarter. The template's rate stands whenever the source spent as
@@ -460,7 +489,7 @@ class CreateVideoStreamsService
             return $params;
         }
 
-        $asked = (int) round((float) $params['audio_bitrate'] * (str_ends_with(strtolower((string) $params['audio_bitrate']), 'k') ? 1000 : 1));
+        $asked = (int) Bitrate::toBps($params['audio_bitrate']);
         $cap = max(self::MIN_AUDIO_BPS, $sourceRate);
 
         if ($asked > $cap) {
@@ -492,7 +521,7 @@ class CreateVideoStreamsService
         };
     }
 
-    private static function channelLayoutLabel(int $channels): string
+    public static function channelLayoutLabel(int $channels): string
     {
         return match ($channels) {
             1 => 'Mono',
@@ -503,7 +532,7 @@ class CreateVideoStreamsService
         };
     }
 
-    private function streamSignature(array $params): string
+    public static function streamSignature(array $params): string
     {
         ksort($params);
 

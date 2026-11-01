@@ -14,6 +14,31 @@ function getXsrfToken(): Record<string, string> {
   return token ? { 'X-XSRF-TOKEN': decodeURIComponent(token) } : {}
 }
 
+/**
+ * An Uppy instance wired to the API's S3 endpoints (`/s3/params`, `/s3/multipart`). Shared by the
+ * video upload store and the add-track dialog, which needs its own instance so its uploads never
+ * show up in — or trigger listeners of — the global video upload queue.
+ */
+export function createS3Uppy(options: { debug?: boolean } = {}) {
+  return new Uppy<Meta, AwsBody>({
+    debug: options.debug ?? false,
+    autoProceed: false,
+  }).use(AwsS3Multipart, {
+    endpoint: import.meta.env.VITE_URL_API,
+    headers: getXsrfToken(),
+    cookiesRule: 'include',
+    limit: 4,
+    getChunkSize() {
+      return 30 * 1024 * 1024
+    },
+  })
+}
+
+/** {@link useUploadStore}'s `refreshCsrfHeader`, for any instance made by {@link createS3Uppy}. */
+export function refreshS3UppyCsrf(uppy: Uppy<Meta, AwsBody>) {
+  uppy.getPlugin<AwsS3Multipart<Meta, AwsBody>>('AwsS3Multipart')?.setOptions({ headers: getXsrfToken() })
+}
+
 export const useUploadStore = defineStore('upload', () => {
   const files = ref<FileUpload[]>([])
   const selectedTemplate = ref<string>('')
@@ -28,18 +53,7 @@ export const useUploadStore = defineStore('upload', () => {
   // `startUpload` is a no-op while it is set, and the button renders disabled.
   const isStarting = ref(false)
 
-  const uppy = markRaw(new Uppy<Meta, AwsBody>({
-    debug: true,
-    autoProceed: false,
-  }).use(AwsS3Multipart, {
-    endpoint: import.meta.env.VITE_URL_API,
-    headers: getXsrfToken(),
-    cookiesRule: 'include',
-    limit: 4,
-    getChunkSize() {
-      return 30 * 1024 * 1024
-    },
-  }))
+  const uppy = markRaw(createS3Uppy({ debug: true }))
 
   // Raw bytes uploaded per file, updated on every progress event. The global
   // speed is derived from the sum of these on a fixed 1s cadence (see below),
@@ -188,7 +202,7 @@ export const useUploadStore = defineStore('upload', () => {
    * the user reloaded the whole page.
    */
   function refreshCsrfHeader() {
-    uppy.getPlugin<AwsS3Multipart<Meta, AwsBody>>('AwsS3Multipart')?.setOptions({ headers: getXsrfToken() })
+    refreshS3UppyCsrf(uppy)
   }
 
   /**

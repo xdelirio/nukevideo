@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Jobs\PackageVideoJob;
 use App\Models\Stream;
 use App\Models\Video;
+use App\Services\ManifestEditor;
 use App\Services\SubtitlePackager;
 use App\Support\Scratch;
 use App\Support\WebVtt;
@@ -136,7 +137,7 @@ class RepairSubtitlesCommand extends Command
             $packager->packageAndGraft(
                 $subs,
                 $workDir,
-                (int) ceil((float) $video->duration) + 2,
+                SubtitlePackager::segmentDurationFor($video),
                 600,
                 ['video' => $video->id],
             );
@@ -237,9 +238,11 @@ class RepairSubtitlesCommand extends Command
         }
 
         foreach ($manifests as $key) {
-            $disk->put($key, (string) file_get_contents("{$workDir}/".basename($key)), [
-                'ContentType' => $this->contentType($key),
-            ]);
+            $disk->put(
+                $key,
+                (string) file_get_contents("{$workDir}/".basename($key)),
+                ManifestEditor::writeOptions(str_ends_with($key, '.mpd') ? 'dash' : 'hls'),
+            );
         }
     }
 

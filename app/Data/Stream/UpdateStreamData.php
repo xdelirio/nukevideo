@@ -6,6 +6,7 @@ use App\Data\RequestData;
 use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
+use App\Services\TrackIngestService;
 use Closure;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Attributes\Validation\Max;
@@ -15,6 +16,9 @@ use Symfony\Component\Intl\Languages;
 
 class UpdateStreamData extends RequestData
 {
+    /** Every writer of a track name holds it to this ({@see TrackIngestService}). */
+    public const NAME_PATTERN = '/^[^",\r\n]+\z/u';
+
     public function __construct(
         /**
          * A comma would break the shaka stream descriptor this is interpolated into, and a quote or
@@ -22,7 +26,7 @@ class UpdateStreamData extends RequestData
          * playlist is edited as text, so a newline here would inject arbitrary tags for every viewer
          * ({@see PackagerCommandBuilder}, {@see ManifestEditor}).
          */
-        #[Max(255), Regex('/^[^",\r\n]+\z/u')]
+        #[Max(255), Regex(self::NAME_PATTERN)]
         public string $name,
         public ?string $language,
         public bool $forced,
@@ -48,11 +52,22 @@ class UpdateStreamData extends RequestData
                 function (string $attribute, mixed $value, Closure $fail) {
                     $primary = strtolower(explode('-', (string) $value)[0]);
 
-                    if (! Languages::exists($primary) && ! Languages::alpha3CodeExists($primary)) {
+                    if (! Languages::exists($primary) && ! Languages::alpha3CodeExists($primary) && ! self::isSpecialLanguage($primary)) {
                         $fail('The :attribute is not a known language.');
                     }
                 },
             ],
         ];
+    }
+
+    /**
+     * ISO 639-2 codes that name no language but are what an honest label needs: `und` (unknown),
+     * `mul` (several), `zxx` (no linguistic content — music, effects), `mis` (uncoded), and the
+     * `qaa`–`qtz` range reserved for local use (a director's commentary, say). CLDR lists none.
+     */
+    public static function isSpecialLanguage(string $code): bool
+    {
+        return in_array($code, ['und', 'mul', 'zxx', 'mis'], true)
+            || (strlen($code) === 3 && $code >= 'qaa' && $code <= 'qtz');
     }
 }

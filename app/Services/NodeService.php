@@ -512,10 +512,12 @@ class NodeService
         }
 
         $labels = ['vector.enable='.Node::containerPrefix()];
-        $isProduction = ! app()->isLocal();
+        // The scheme the links are minted with, not the environment: a router on `web` behind an
+        // https:// link is a 404 from Traefik ({@see Node::proxyScheme}).
+        $tls = Node::proxyScheme() === 'https://';
 
         if ($node->hostname) {
-            $entrypoint = $isProduction ? 'websecure' : 'web';
+            $entrypoint = $tls ? 'websecure' : 'web';
 
             // Namespaced per node AND per environment. Traefik keys routers by name across every
             // container it discovers on the host, and it discovers all of them — so a fixed `proxy`
@@ -529,8 +531,11 @@ class NodeService
             $labels[] = "traefik.http.routers.{$router}.rule=Host(`{$node->hostname}`)";
             $labels[] = "traefik.http.routers.{$router}.entrypoints={$entrypoint}";
             $labels[] = "traefik.http.services.{$router}.loadbalancer.server.port=80";
-            if ($isProduction) {
-                $labels[] = "traefik.http.routers.{$router}.tls.certresolver=le";
+            // TLS without naming a resolver: the certificate is the business of whichever Traefik
+            // fronts the edge. Ours makes `le` the default of `websecure` ({@see traefikVars});
+            // a host whose own reverse proxy holds port 80 uses the default it was given.
+            if ($tls) {
+                $labels[] = "traefik.http.routers.{$router}.tls=true";
             }
         }
 
@@ -573,7 +578,7 @@ class NodeService
             'CHOSEN_SHARED' => implode(' ', $sharedDisks),
             'EDGE_TUNING_CANDIDATES' => implode("\n", self::EDGE_TUNING_FLAGS),
             'HOST_PROXY_NETWORK' => self::HOST_PROXY_NETWORK,
-            ...$this->traefikVars($isProduction, $this->cloudflare->proxies($node)),
+            ...$this->traefikVars($tls, $this->cloudflare->proxies($node)),
         ];
     }
 
@@ -595,6 +600,7 @@ class NodeService
 
         if ($tls) {
             $command .= ' --entrypoints.websecure.address=:443'
+                .' --entrypoints.websecure.http.tls.certresolver=le'
                 .' --certificatesresolvers.le.acme.httpchallenge.entrypoint=web'
                 .' --certificatesresolvers.le.acme.storage=/certs/acme.json';
         }

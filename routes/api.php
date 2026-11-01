@@ -122,6 +122,16 @@ Route::middleware(['auth:sanctum'])->group(function () {
         // to a project they are the caller's own, and unnarrowed they are everyone's.
         Route::get('analytics', [AnalyticsController::class, 'index']);
 
+        // The same dashboard a panel at a time, for the admin page to load in parallel and draw as
+        // each lands. Same group and same rules as the whole payload above, which is built from
+        // the same pieces.
+        Route::get('analytics/summary', [AnalyticsController::class, 'summary']);
+        Route::get('analytics/bandwidth', [AnalyticsController::class, 'bandwidth']);
+        Route::get('analytics/top-ips', [AnalyticsController::class, 'topIps']);
+        Route::get('analytics/top-videos', [AnalyticsController::class, 'topVideos']);
+        Route::get('analytics/top-tracking-ids', [AnalyticsController::class, 'topTrackingIds']);
+        Route::get('analytics/top-external-users', [AnalyticsController::class, 'topExternalUsers']);
+
         // The general read over `usage_daily`: any breakdown the allowlist permits, rather than a new
         // endpoint per question. Inside this group so that a project resolves when the caller has
         // one — `ResolveProject` never aborts, it only makes the project available — which lets the

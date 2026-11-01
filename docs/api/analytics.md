@@ -128,6 +128,34 @@ sends no labels, in any language — those belong to whatever is drawing them.
 | `cpu_encoding` | `seconds` |
 | `upload_volume` | `bytes` |
 
+### One panel at a time
+
+The same dashboard, split by panel. Each endpoint takes the query parameters above and answers with
+exactly its piece of the full payload — same rules, same project context, same shape under `data`.
+Request the ones you draw, all at once, and render each as it arrives: one payload is as slow as its
+slowest breakdown, and nothing can show until all of them are done.
+
+| Endpoint | Answers with |
+|----------|--------------|
+| `GET /api/analytics/summary` | `cards` |
+| `GET /api/analytics/bandwidth` | `bandwidthOverTime` |
+| `GET /api/analytics/top-ips` | `topIps` |
+| `GET /api/analytics/top-videos` | `topVideos` |
+| `GET /api/analytics/top-tracking-ids` | `topTrackingIds` |
+| `GET /api/analytics/top-external-users` | `topExternalUsers` |
+
+```
+GET /api/analytics/top-videos?from=2026-04-01&to=2026-04-30&limit=20
+```
+
+```json
+{
+  "data": [{ "video": "01J...", "externalResourceId": "", "bytes": 2147483648, "sessions": 88, "uniqueIps": 71 }]
+}
+```
+
+The four `top-*` endpoints follow the warning above: without project context they answer `[]`.
+
 ## Bandwidth by tracking id
 
 `topTrackingIds` is the read side of the `trackingId` you mint links with

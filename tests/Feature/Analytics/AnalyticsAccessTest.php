@@ -39,15 +39,24 @@ function stubAnalyticsService(): void
     }));
 }
 
+// The whole dashboard, each of its panels, and the queue: one door, the same for all of them.
+dataset('analytics reads', [
+    'the dashboard' => '/api/analytics?from=2026-01-01&to=2026-01-31',
+    'the summary panel' => '/api/analytics/summary?from=2026-01-01&to=2026-01-31',
+    'the bandwidth panel' => '/api/analytics/bandwidth?from=2026-01-01&to=2026-01-31',
+    'the top addresses panel' => '/api/analytics/top-ips?from=2026-01-01&to=2026-01-31',
+    'the top videos panel' => '/api/analytics/top-videos?from=2026-01-01&to=2026-01-31',
+    'the top tracking ids panel' => '/api/analytics/top-tracking-ids?from=2026-01-01&to=2026-01-31',
+    'the top customers panel' => '/api/analytics/top-external-users?from=2026-01-01&to=2026-01-31',
+    'the queue' => '/api/analytics/queue',
+]);
+
 it('lets a non-admin user read analytics', function (string $endpoint) {
     stubAnalyticsService();
     Sanctum::actingAs(User::factory()->create(['is_admin' => false]));
 
     $this->getJson($endpoint)->assertOk();
-})->with([
-    'the dashboard' => '/api/analytics?from=2026-01-01&to=2026-01-31',
-    'the queue' => '/api/analytics/queue',
-]);
+})->with('analytics reads');
 
 it('lets a project API key read analytics', function (string $endpoint) {
     stubAnalyticsService();
@@ -59,17 +68,11 @@ it('lets a project API key read analytics', function (string $endpoint) {
     $key = app(ApiTokenService::class)->regenerateProjectKey($project)->plainTextToken;
 
     $this->withToken($key)->getJson($endpoint)->assertOk();
-})->with([
-    'the dashboard' => '/api/analytics?from=2026-01-01&to=2026-01-31',
-    'the queue' => '/api/analytics/queue',
-]);
+})->with('analytics reads');
 
 it('still refuses analytics to an unauthenticated caller', function (string $endpoint) {
     $this->getJson($endpoint)->assertUnauthorized();
-})->with([
-    'the dashboard' => '/api/analytics?from=2026-01-01&to=2026-01-31',
-    'the queue' => '/api/analytics/queue',
-]);
+})->with('analytics reads');
 
 it('did not open the admin surfaces alongside it', function (string $endpoint) {
     // Opening the metrics is a decision about metrics. Everything that operates the instance —

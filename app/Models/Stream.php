@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\StreamStatus;
 use App\Observers\StreamObserver;
 use App\Services\ChunkTranscodeService;
 use App\Services\PackagerCommandBuilder;
@@ -19,6 +20,7 @@ class Stream extends Model
         'name',
         'path',
         'type',
+        'status',
         'package_size',
         'file_size',
         'meta',
@@ -51,6 +53,7 @@ class Stream extends Model
             'package_size' => 'integer',
             'file_size' => 'integer',
             'forced' => 'boolean',
+            'status' => StreamStatus::class,
         ];
     }
 

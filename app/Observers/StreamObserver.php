@@ -3,8 +3,10 @@
 namespace App\Observers;
 
 use App\Enums\VideoStatus;
+use App\Jobs\AddTrackJob;
 use App\Jobs\CleanupVideoResourcesJob;
 use App\Models\Stream;
+use App\Services\AddTrackService;
 use App\Services\UppyS3Service;
 use App\Services\WebhookDispatcher;
 use Illuminate\Support\Facades\Log;
@@ -17,9 +19,11 @@ class StreamObserver
      * to the last one. `path` is the one that happens: archiving an `original` rewrites it on an
      * already-completed video ({@see CleanupVideoResourcesJob::archiveOriginal}). `updated_at` is
      * listed because every update carries it — leave it out and the diff below is never empty, so
-     * the `path` filter would never fire.
+     * the `path` filter would never fire. `status` and `error_log` move while a track is being added
+     * to a completed video; that job announces its own outcome ({@see AddTrackJob}),
+     * so each flip would only be a duplicate of it.
      */
-    private const SILENT_COLUMNS = ['path', 'updated_at'];
+    private const SILENT_COLUMNS = ['path', 'updated_at', 'status', 'error_log'];
 
     /** {@see withoutAnnouncing} */
     private static bool $announcing = true;
@@ -47,8 +51,9 @@ class StreamObserver
     /**
      * `updated` rather than `saved`: the insert path never calls `syncChanges()`, so `getChanges()`
      * is empty after a create and stale after a no-op `save()` — the first would read as "nothing
-     * changed" and the second would announce the previous edit twice. Nothing creates a stream on a
-     * terminal video anyway; a run mints them all while the video is still active.
+     * changed" and the second would announce the previous edit twice. A stream created on a
+     * terminal video — a track added to it — is announced by its own job, as `video.track_ready`
+     * or `video.track_failed` ({@see AddTrackService}).
      */
     public function updated(Stream $stream): void
     {

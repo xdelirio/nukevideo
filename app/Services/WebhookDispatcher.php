@@ -8,7 +8,8 @@ use App\Models\Video;
 
 class WebhookDispatcher
 {
-    public static function forVideo(string $event, Video $video): void
+    /** `$extra` adds top-level fields next to `data`, which stays the full video for every event. */
+    public static function forVideo(string $event, Video $video, array $extra = []): void
     {
         $project = $video->project;
 
@@ -26,7 +27,8 @@ class WebhookDispatcher
         $payload = [
             'event' => $event,
             'timestamp' => now()->timestamp,
-            'data' => VideoData::fromModel($video->loadMissing(['outputs.streams', 'streams'])),
+            'data' => VideoData::fromModel($video->loadMissing(['outputs.streams', 'streams', 'template', 'templateVersion'])),
+            ...$extra,
         ];
 
         DispatchWebhookJob::dispatch(
