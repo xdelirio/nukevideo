@@ -16,6 +16,7 @@
  * test is the authorization and the shaping, which is where this endpoint can go wrong.
  */
 
+use App\Enums\MetricMeasure;
 use App\Models\Project;
 use App\Models\User;
 use App\Services\AnalyticsService;
@@ -252,3 +253,36 @@ it('still refuses a query to an unauthenticated caller', function () {
         'dimensions' => ['date'],
     ])->assertUnauthorized();
 });
+
+it('hands the measures asked for to the query, as enum cases', function () {
+    $seen = stubMetricsQuery();
+
+    $this->postJson(METRICS_ENDPOINT, [
+        'from' => '2026-04-01',
+        'to' => '2026-04-30',
+        'dimensions' => ['video'],
+        'measures' => ['requests', 'unique_ips', 'unique_tracking_ids'],
+    ])->assertOk();
+
+    expect($seen['args'][7])->toBe([MetricMeasure::REQUESTS, MetricMeasure::UNIQUE_IPS, MetricMeasure::UNIQUE_TRACKING_IDS]);
+});
+
+it('asks for the sum alone when no measure is named', function () {
+    $seen = stubMetricsQuery();
+
+    $this->postJson(METRICS_ENDPOINT, ['from' => '2026-04-01', 'to' => '2026-04-30', 'dimensions' => ['date']])->assertOk();
+
+    expect($seen['args'][7])->toBe([]);
+});
+
+it('refuses a measure it cannot answer', function (array $payload, string $field) {
+    stubMetricsQuery();
+
+    $this->postJson(METRICS_ENDPOINT, ['from' => '2026-04-01', 'to' => '2026-04-30', 'dimensions' => ['date'], ...$payload])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors($field);
+})->with([
+    // The wide shape pivots the sum into a field per metric; a count there would be read as bytes.
+    'a count in the wide shape' => [['shape' => 'wide', 'measures' => ['requests']], 'measures'],
+    'a measure that does not exist' => [['measures' => ['median_bytes']], 'measures.0'],
+]);

@@ -10,12 +10,16 @@ use App\Data\Analytics\DashboardQueryData;
 use App\Data\Analytics\EdgeDeliveryData;
 use App\Data\Analytics\EdgeDeliveryQueryData;
 use App\Data\Analytics\EncodingPointData;
+use App\Data\Analytics\SharedIpData;
+use App\Data\Analytics\SharedIpsQueryData;
 use App\Data\Analytics\TopExternalUserData;
 use App\Data\Analytics\TopIpData;
 use App\Data\Analytics\TopTrackingIdData;
 use App\Data\Analytics\TopVideoData;
 use App\Data\Analytics\TrackingIdBytesData;
 use App\Data\Analytics\TrackingIdBytesQueryData;
+use App\Data\Analytics\TrackingIdIpData;
+use App\Data\Analytics\TrackingIdIpsQueryData;
 use App\Data\Analytics\VideoBytesData;
 use App\Data\Analytics\VideoBytesQueryData;
 use App\Enums\MetricUnit;
@@ -25,8 +29,10 @@ use App\Http\Controllers\Controller;
 use App\Models\Node;
 use App\Models\Video;
 use App\Services\AnalyticsService;
+use App\Support\TrackingId;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class AnalyticsController extends Controller
 {
@@ -182,6 +188,47 @@ class AnalyticsController extends Controller
     public function topExternalUsers(Request $request, DashboardQueryData $query): JsonResponse
     {
         return response()->json(['data' => $this->topExternalUsersFor($query, $this->projectId($request))]);
+    }
+
+    /**
+     * Addresses several tracking ids were served to, for catching one person behind many accounts.
+     * Requires project context — the `project()` macro aborts without it — because it is a list of
+     * viewer addresses and viewer labels, which only the project's own traffic may answer with.
+     */
+    public function sharedIps(Request $request, SharedIpsQueryData $query): JsonResponse
+    {
+        return response()->json([
+            'data' => SharedIpData::collect(array_map(fn (array $row) => [
+                'ip' => $row['ip'],
+                'country' => $row['country'],
+                'trackingIdCount' => $row['tracking_id_count'],
+                'bytes' => $row['bytes'],
+                'days' => $row['days'],
+                'trackingIds' => $row['tracking_ids'],
+            ], $this->analyticsService->sharedIps($query->from, $query->to, $request->project()->id, $query->minimum(), $query->size(), maxTrackingIds: $query->maxTrackingIds, offset: $query->skip()))),
+        ]);
+    }
+
+    /** Every address one tracking id was served to: the other direction of {@see sharedIps()}. */
+    public function trackingIdIps(Request $request, TrackingIdIpsQueryData $query, string $trackingId): JsonResponse
+    {
+        // The path segment is the only thing here not validated by the Data object. An id outside
+        // the alphabet could never have been stored, so it is refused as malformed, not looked up.
+        if (! TrackingId::isValid($trackingId)) {
+            throw ValidationException::withMessages(['trackingId' => 'Not a tracking id: 1 to 64 characters of A-Z a-z 0-9 _ -.']);
+        }
+
+        return response()->json([
+            'data' => TrackingIdIpData::collect(array_map(fn (array $row) => [
+                'ip' => $row['ip'],
+                'country' => $row['country'],
+                'bytes' => $row['bytes'],
+                'requests' => $row['requests'],
+                'days' => $row['days'],
+                'firstSeen' => $row['first_seen'],
+                'lastSeen' => $row['last_seen'],
+            ], $this->analyticsService->trackingIdIps($query->from, $query->to, $request->project()->id, $trackingId, $query->size()))),
+        ]);
     }
 
     /**

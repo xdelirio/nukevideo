@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Data\Analytics\MetricsQueryData;
 use App\Enums\MetricDimension;
+use App\Enums\MetricMeasure;
 use App\Enums\MetricShape;
 use App\Enums\UsageMetric;
 use App\Http\Controllers\Controller;
@@ -46,6 +47,7 @@ class MetricsController extends Controller
         $projectId = $request->attributes->get('resolved_project')?->id;
 
         $this->assertDimensionsAllowed($data, $projectId !== null);
+        $this->assertMeasuresFitShape($data);
 
         $rows = $this->analytics->query(
             $data->from,
@@ -61,6 +63,7 @@ class MetricsController extends Controller
             $data->list('metrics'),
             $this->accountScope($request->user(), $data),
             $projectId,
+            $data->measures(),
         );
 
         return response()->json([
@@ -108,6 +111,22 @@ class MetricsController extends Controller
                     : "Breaking down by [{$dimension->value}] needs either project context (send"
                         .' X-Project-Ulid, or use a project API key) or an explicit list of your own '
                         .$named.'.',
+            ]);
+        }
+    }
+
+    /**
+     * The wide shape pivots `value` into one field per metric; a second measure has no field of its
+     * own to go in, and folding it into the pivot would make `streaming_bytes` mean bytes in one
+     * response and requests in the next. Refused rather than silently dropped.
+     */
+    private function assertMeasuresFitShape(MetricsQueryData $data): void
+    {
+        $extra = array_filter($data->measures(), fn (MetricMeasure $m) => $m !== MetricMeasure::VALUE);
+
+        if ($data->shape === MetricShape::WIDE && $extra !== []) {
+            throw ValidationException::withMessages([
+                'measures' => 'The wide shape carries the sum only. Ask for other measures with the long shape.',
             ]);
         }
     }

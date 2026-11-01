@@ -3,6 +3,7 @@
 namespace App\Data\Analytics;
 
 use App\Enums\MetricDimension;
+use App\Enums\MetricMeasure;
 use App\Enums\MetricShape;
 use App\Enums\UsageMetric;
 use App\Http\Controllers\Api\MetricsController;
@@ -49,7 +50,23 @@ class MetricsQueryData extends BatchQueryData
         #[MapInputName(CamelCaseMapper::class)]
         public array|Optional $externalUserIds,
         public MetricShape $shape = MetricShape::LONG,
+        /**
+         * Strings mapped in {@see measures()}, for the same reason as `$dimensions`.
+         *
+         * @var list<string>
+         */
+        public array|Optional $measures = new Optional,
     ) {}
+
+    /**
+     * What to compute beside the sum of `value`, as enum cases.
+     *
+     * @return list<MetricMeasure>
+     */
+    public function measures(): array
+    {
+        return array_map(fn (string $m) => MetricMeasure::from($m), $this->list('measures'));
+    }
 
     /**
      * The dimensions as enum cases, deduplicated — naming one twice would repeat it in the GROUP BY
@@ -103,6 +120,9 @@ class MetricsQueryData extends BatchQueryData
             'externalUserIds.*' => 'required|string|max:255',
 
             'shape' => ['nullable', Rule::enum(MetricShape::class)],
+
+            'measures' => 'sometimes|array|min:1|max:'.count(MetricMeasure::cases()),
+            'measures.*' => ['required', Rule::enum(MetricMeasure::class)],
         ];
     }
 }

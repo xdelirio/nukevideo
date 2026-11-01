@@ -20,7 +20,8 @@ GET /api/videos
 | `externalUserId` | string | Exact match on the id supplied at upload |
 | `externalResourceId` | string | Exact match on the id supplied at upload |
 | `status` | string | One status, or several comma-separated (`completed,failed`): `pending`, `downloading`, `running`, `uploading`, `completed`, `failed`. An unknown value is a `422` |
-| `sort` | string | `created_at` (default), `name`, `size`, `duration` or `status`. `size` is what the listing shows — package plus retained file bytes over every stream |
+| `updatedSince` | datetime | Only videos changed at or after this instant (ISO 8601) — see [Keeping a copy in sync](#keeping-a-copy-in-sync) |
+| `sort` | string | `created_at` (default), `updated_at`, `name`, `size`, `duration` or `status`. `size` is what the listing shows — package plus retained file bytes over every stream |
 | `direction` | string | `desc` (default) or `asc` |
 
 **Response:**
@@ -41,6 +42,7 @@ field [Get Video](#get-video) returns. That is why `perPage` is capped at 100.
       "duration": 120.5,
       "aspectRatio": "16:9",
       "createdAt": "2025-01-15T10:30:00+00:00",
+      "updatedAt": "2025-01-15T10:42:10+00:00",
       "externalUserId": "user-42",
       "externalResourceId": "movie-7",
       "thumbnailUrl": "https://api.example.com/api/videos/01HX.../thumbnail.jpg",
@@ -56,6 +58,19 @@ field [Get Video](#get-video) returns. That is why `perPage` is capped at 100.
   "total": 72
 }
 ```
+
+### Keeping a copy in sync
+
+An integration that mirrors the catalogue does not need to walk it. Keep the time of your last poll
+and ask for what changed since, oldest first:
+
+```
+GET /api/videos?updatedSince=2026-04-16T10:00:00Z&sort=updated_at&direction=asc&perPage=100
+```
+
+Every video carries `updatedAt`. A status change, a rename or new metadata moves it; a deleted video
+does not appear at all — the [`video.deleted` webhook](/api/webhooks) reports those, for videos
+uploaded with an `externalResourceId`.
 
 ## Get Video
 
@@ -78,6 +93,7 @@ returns for each row, and the one a [webhook](/api/webhooks#event-payload) carri
     "duration": 120.5,
     "aspectRatio": "16:9",
     "createdAt": "2025-01-15T10:30:00+00:00",
+    "updatedAt": "2025-01-15T10:42:10+00:00",
     "externalUserId": "user-42",
     "externalResourceId": "movie-7",
     "thumbnailUrl": "https://cdn.example.com/01HX.../assets/thumbnail.jpg",

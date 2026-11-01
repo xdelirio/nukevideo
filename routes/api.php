@@ -5,12 +5,14 @@ use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\ApiTokenController;
 use App\Http\Controllers\Api\AppSettingsController;
 use App\Http\Controllers\Api\CdnSettingsController;
+use App\Http\Controllers\Api\ExternalUserController;
 use App\Http\Controllers\Api\MetricsController;
 use App\Http\Controllers\Api\NodeController;
 use App\Http\Controllers\Api\NodeEnvironmentController;
 use App\Http\Controllers\Api\NodeOperationController;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\SettingsController;
+use App\Http\Controllers\Api\StorageController;
 use App\Http\Controllers\Api\UsageController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\AuthController;
@@ -132,6 +134,11 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('analytics/top-tracking-ids', [AnalyticsController::class, 'topTrackingIds']);
         Route::get('analytics/top-external-users', [AnalyticsController::class, 'topExternalUsers']);
 
+        // Signals for one person behind many accounts: addresses several tracking ids share, and
+        // the addresses of one id. Lists of viewer addresses and labels, so they need the project.
+        Route::get('analytics/shared-ips', [AnalyticsController::class, 'sharedIps']);
+        Route::get('analytics/tracking-ids/{trackingId}/ips', [AnalyticsController::class, 'trackingIdIps']);
+
         // The general read over `usage_daily`: any breakdown the allowlist permits, rather than a new
         // endpoint per question. Inside this group so that a project resolves when the caller has
         // one — `ResolveProject` never aborts, it only makes the project available — which lets the
@@ -144,6 +151,18 @@ Route::middleware(['auth:sanctum'])->group(function () {
         // the query is pinned to `project_id` and a ULID from elsewhere matches nothing. Leaving it
         // with the unscoped metrics would have let any key read any project's per-title bandwidth.
         Route::match(['get', 'post'], 'analytics/videos', [AnalyticsController::class, 'videos']);
+
+        // The project's customers — the `externalUserId` its integration uploads with. Project
+        // context is required, not just accepted: the id is unique per project and nowhere else.
+        // The id may contain slashes (it is the integration's free text), hence the `.+`; `usage`
+        // is declared first so it is never read as an id.
+        Route::match(['get', 'post'], 'external-users/usage', [ExternalUserController::class, 'usage']);
+        Route::get('external-users', [ExternalUserController::class, 'index']);
+        Route::delete('external-users/{externalUserId}/videos', [ExternalUserController::class, 'destroyVideos'])->where('externalUserId', '.+');
+        Route::get('external-users/{externalUserId}', [ExternalUserController::class, 'show'])->where('externalUserId', '.+');
+
+        // What the project's catalogue holds on storage now, split by video status.
+        Route::get('storage', [StorageController::class, 'show']);
 
         // Activity log (scoped to the project's videos)
         Route::get('activity-log', [ActivityLogController::class, 'index']);

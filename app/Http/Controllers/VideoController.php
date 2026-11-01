@@ -16,6 +16,7 @@ use App\Services\VideoService;
 use App\Services\VodLinkService;
 use App\Support\TrackingId;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 
 class VideoController extends Controller
@@ -45,6 +46,10 @@ class VideoController extends Controller
 
         if ($statuses = $data->statuses()) {
             $query->whereIn('status', $statuses);
+        }
+
+        if ($data->updatedSince) {
+            $query->where('updated_at', '>=', Carbon::parse($data->updatedSince));
         }
 
         // `size` is not a column: it is what the listing shows, the sum of every stream's package

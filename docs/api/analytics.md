@@ -218,6 +218,7 @@ POST /api/metrics
 | `trackingIds` | string[] | Narrow to these tracking ids, up to 1000 |
 | `externalUserIds` | string[] | Narrow to these customer labels, up to 1000 |
 | `shape` | string | `long` (default) or `wide` — see [Shapes](#shapes) |
+| `measures` | string[] | What to compute beside the sum — see [Measures](#measures). Long shape only |
 
 ### Dimensions, and what each one requires
 
@@ -295,6 +296,35 @@ range still gets no rows, because absence is the answer everywhere in this API.
 A query returning more than **50,000** rows responds `422` rather than a truncated answer, and so
 does a `wide` fill that would expand past it. Shorten the range, drop a dimension, or narrow a list.
 :::
+
+### Measures
+
+Every row carries `value`, the sum of the metric. `measures` adds what else `usage_daily` knows about
+the same group:
+
+| Measure | What it is |
+|---------|------------|
+| `value` | The sum, in the metric's unit. Always returned; naming it changes nothing |
+| `requests` | How many requests were summed into it: segment and manifest fetches for delivery, uploads and encoded chunks otherwise |
+| `unique_ips` | Distinct viewer addresses |
+| `unique_tracking_ids` | Distinct tracking ids — distinct viewers, when every link carries one. Unattributed traffic is not a viewer and is not counted |
+
+```json
+{ "from": "2026-04-01", "to": "2026-04-30", "dimensions": ["video"], "measures": ["requests", "unique_tracking_ids"] }
+```
+
+```json
+{ "data": [
+  { "video": "01J...", "value": 2147483648, "requests": 8812, "unique_tracking_ids": 341 }
+] }
+```
+
+A distinct count is counted within each group — viewers per video per day are not summable into
+viewers per video, so ask for the grouping you mean. The `wide` shape carries the sum only: asking it
+for another measure is a `422`.
+
+Upload volume and encoding seconds carry their video from this release on, so `video` breaks them
+down per title too. Rows booked before it carry no video and fall under `""`.
 
 ## Batch bandwidth by tracking id
 
@@ -404,6 +434,59 @@ A ULID that is not yours and one that moved no bytes therefore produce the same 
 on purpose: answering differently would turn this into a way to find out which videos exist on the
 instance.
 :::
+
+## Shared addresses
+
+Viewer addresses that several tracking ids were served to — the read for catching one person behind
+many accounts, each collecting its own free quota. Requires project context.
+
+```
+GET /api/analytics/shared-ips?from=2026-04-01&to=2026-04-30&minTrackingIds=2&maxTrackingIds=10&limit=100
+```
+
+| Parameter | Type | Notes |
+|-----------|------|-------|
+| `from`, `to` | date | Required |
+| `minTrackingIds` | integer | How many distinct tracking ids an address needs to be listed. Default `3`, minimum `2` |
+| `maxTrackingIds` | integer | Leave out addresses shared by more ids than this — a carrier NAT, a campus or a VPN serves hundreds. At least `minTrackingIds`. Omitted, no ceiling |
+| `limit` | integer | How many addresses. Default `100`, maximum `1000` |
+| `offset` | integer | Addresses to skip, for the next page. Default `0` |
+
+```json
+{ "data": [
+  { "ip": "203.0.113.7", "country": "MX", "trackingIdCount": 3, "bytes": 52428800, "days": 12,
+    "trackingIds": ["acct-1", "acct-2", "acct-3"] }
+] }
+```
+
+Ordered by `trackingIdCount`, then bytes, then `ip`, so pages read with `offset` neither repeat nor
+skip an address — provided `to` is before today: today's traffic is still being added, and bytes
+that move between two reads can shift a row across a page boundary. A page shorter than `limit` is
+the last. `trackingIds` lists up to 50 per address, heaviest first;
+`trackingIdCount` is always exact. Unattributed traffic is left out.
+
+::: warning A signal, not a verdict
+Mobile carriers put thousands of phones behind one IPv4 address (CGNAT), and households, offices and
+campuses share one honestly. `days` is what tells a farm — the same few ids, day after day — from a
+gateway, where hundreds of ids each appear once. Addresses are compared exactly: an IPv6 device
+rotating within its /64 shows up as several addresses. The address the edge records is the viewer's,
+behind Cloudflare and the local proxy alike.
+:::
+
+## Addresses of a tracking id
+
+The other direction: every address one tracking id was served to. Requires project context.
+
+```
+GET /api/analytics/tracking-ids/{trackingId}/ips?from=2026-04-01&to=2026-04-30&limit=100
+```
+
+```json
+{ "data": [
+  { "ip": "203.0.113.7", "country": "MX", "bytes": 52428800, "requests": 912, "days": 12,
+    "firstSeen": "2026-04-02", "lastSeen": "2026-04-29" }
+] }
+```
 
 ## Queue
 

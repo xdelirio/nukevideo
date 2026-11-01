@@ -96,6 +96,11 @@ export type ProjectSettingsData = {
 webhookUrl: string | null,
 webhookSecret: string | null,
 };
+export type ProjectStorageData = {
+videos: number,
+storage: App.Data.StorageData,
+byStatus: App.Data.StatusStorageData[],
+};
 export type RequestData = object;
 export type SelfHostedConfigData = {
 tokenSecret: string,
@@ -111,6 +116,16 @@ state: string,
 export type SkippedTrackData = {
 ulid: string,
 reason: App.Enums.DownloadSkipReason,
+};
+export type StatusStorageData = {
+status: string,
+videos: number,
+storage: App.Data.StorageData,
+};
+export type StorageData = {
+totalBytes: number,
+servedBytes: number,
+sourceBytes: number,
 };
 export type StreamData = {
 ulid: string,
@@ -170,6 +185,7 @@ aspectRatio: string,
 status: App.Enums.VideoStatus,
 priority: App.Enums.VideoPriority,
 createdAt: string,
+updatedAt: string,
 externalUserId: string | null,
 externalResourceId: string | null,
 template: App.Data.VideoTemplateData | null,
@@ -263,6 +279,23 @@ videos: string[],
 trackingIds: string[],
 externalUserIds: string[],
 shape: App.Enums.MetricShape,
+measures: string[],
+};
+export type SharedIpData = {
+ip: string,
+country: string,
+trackingIdCount: number,
+bytes: number,
+days: number,
+trackingIds: string[],
+};
+export type SharedIpsQueryData = {
+from: string,
+to: string,
+minTrackingIds: number | null,
+maxTrackingIds: number | null,
+limit: number | null,
+offset: number | null,
 };
 export type TopExternalUserData = {
 externalUserId: string,
@@ -299,6 +332,20 @@ trackingIds: string[],
 metric: string | null,
 granularity: App.Enums.UsageGranularity,
 includeUnattributed: boolean,
+};
+export type TrackingIdIpData = {
+ip: string,
+country: string,
+bytes: number,
+requests: number,
+days: number,
+firstSeen: string,
+lastSeen: string,
+};
+export type TrackingIdIpsQueryData = {
+from: string,
+to: string,
+limit: number | null,
 };
 export type VideoBytesData = {
 video: string,
@@ -342,6 +389,66 @@ namespace Auth {
 export type LoginData = {
 email: string,
 password: string,
+};
+}
+namespace ExternalUser {
+export type DeleteExternalUserVideosData = {
+confirm: string,
+};
+export type ExternalUserData = {
+externalUserId: string,
+videos: App.Data.ExternalUser.ExternalUserVideosData,
+storage: App.Data.StorageData,
+usage: App.Data.ExternalUser.ExternalUserUsageData,
+};
+export type ExternalUserListItemData = {
+externalUserId: string,
+videos: number,
+storageBytes: number,
+lastUploadAt: string,
+};
+export type ExternalUserMetricData = {
+metric: string,
+unit: App.Enums.MetricUnit,
+value: number,
+requests: number,
+};
+export type ExternalUserQueryData = {
+from: string,
+to: string,
+};
+export type ExternalUserUsageData = {
+from: string,
+to: string,
+deliveredBytes: number,
+uniqueIps: number,
+uniqueTrackingIds: number,
+metrics: App.Data.ExternalUser.ExternalUserMetricData[],
+};
+export type ExternalUserUsageQueryData = {
+from: string,
+to: string,
+externalUserIds: string[],
+metric: string | null,
+granularity: App.Enums.UsageGranularity,
+};
+export type ExternalUserUsageRowData = {
+externalUserId: string,
+metric: string,
+unit: App.Enums.MetricUnit,
+value: number,
+requests: number,
+date: string | null,
+};
+export type ExternalUserVideosData = {
+total: number,
+byStatus: Record<string, number>,
+};
+export type IndexExternalUsersData = {
+search: string | null,
+sort: string,
+direction: string,
+perPage: number,
 };
 }
 namespace Node {
@@ -459,6 +566,7 @@ search: string | null,
 externalUserId: string | null,
 externalResourceId: string | null,
 status: string | null,
+updatedSince: string | null,
 sort: string,
 direction: string,
 perPage: number,
@@ -492,6 +600,7 @@ namespace Enums {
 export type CdnDriver = 'self_hosted' | 'bunny';
 export type DownloadSkipReason = 'not_retained' | 'not_downloadable' | 'not_found';
 export type MetricDimension = 'date' | 'metric' | 'tracking_id' | 'video' | 'external_user_id' | 'ip' | 'country' | 'node_id' | 'cache';
+export type MetricMeasure = 'value' | 'requests' | 'unique_ips' | 'unique_tracking_ids';
 export type MetricShape = 'long' | 'wide';
 export type MetricUnit = 'bytes' | 'seconds' | 'count';
 export type NodeAccel = 'intel' | 'nvidia';

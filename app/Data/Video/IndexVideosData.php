@@ -19,7 +19,7 @@ use Spatie\LaravelData\Mappers\CamelCaseMapper;
 class IndexVideosData extends RequestData
 {
     /** What the list can be ordered by. `size` is summed over the streams, the rest are columns. */
-    public const SORTS = ['created_at', 'name', 'size', 'duration', 'status'];
+    public const SORTS = ['created_at', 'updated_at', 'name', 'size', 'duration', 'status'];
 
     /** The page size when none is asked for, and the cap: the payload embeds each video's outputs and streams. */
     public const PER_PAGE_DEFAULT = 15;
@@ -34,6 +34,14 @@ class IndexVideosData extends RequestData
         public ?string $externalResourceId = null,
         /** One status, or several comma-separated (`completed,failed`). */
         public ?string $status = null,
+        /**
+         * Only the videos changed at or after this instant (ISO 8601). How an integration keeps
+         * its own copy in sync: ask for what changed since the last poll, sorted by `updated_at`,
+         * instead of walking the whole catalogue. A deleted video does not appear: the
+         * `video.deleted` webhook reports those, for videos uploaded with an `externalResourceId`.
+         */
+        #[MapInputName(CamelCaseMapper::class)]
+        public ?string $updatedSince = null,
         public string $sort = 'created_at',
         public string $direction = 'desc',
         #[MapInputName(CamelCaseMapper::class)]
@@ -78,6 +86,7 @@ class IndexVideosData extends RequestData
             'search' => 'nullable|string|max:255',
             'externalUserId' => 'nullable|string|max:255',
             'externalResourceId' => 'nullable|string|max:255',
+            'updatedSince' => 'nullable|date',
             'status' => [
                 'nullable', 'string',
                 function ($attribute, $value, $fail) {
