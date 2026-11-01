@@ -19,6 +19,7 @@ class VideoData extends Data
         public VideoStatus $status,
         public VideoPriority $priority,
         public string $createdAt,
+        public string $updatedAt,
         public ?string $externalUserId,
         public ?string $externalResourceId,
         /** The template, and the version of it, this video was encoded with. Later edits to the
@@ -48,6 +49,7 @@ class VideoData extends Data
             status: VideoStatus::from($video->status),
             priority: VideoPriority::from($video->priority),
             createdAt: $video->created_at->toIso8601String(),
+            updatedAt: $video->updated_at->toIso8601String(),
             externalUserId: $video->external_user_id,
             externalResourceId: $video->external_resource_id,
             template: VideoTemplateData::fromVideo($video),

@@ -6,6 +6,7 @@ use App\Data\Analytics\MetricsQueryData;
 use App\Data\Analytics\TrackingIdBytesQueryData;
 use App\Data\Stream\DownloadStreamData;
 use App\Enums\MetricDimension;
+use App\Enums\MetricMeasure;
 use App\Enums\UsageMetric;
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\MetricsController;
@@ -38,6 +39,9 @@ class AnalyticsService
      * return the limit itself.
      */
     public const SERIES_TOP_N_DEFAULT = 5;
+
+    /** How many tracking ids {@see sharedIps()} lists per address; the count beside it is exact. */
+    public const SHARED_IP_IDS_PER_IP = 50;
 
     private static function usage(string $from, string $to): Builder
     {
@@ -276,9 +280,10 @@ class AnalyticsService
      * @param  list<MetricDimension>  $dimensions
      * @param  array<string, list<string>>  $filters  keyed by `usage_daily` column
      * @param  list<string>  $metrics  empty for the delivery set
+     * @param  list<MetricMeasure>  $measures  what to compute beside the sum, which is always there
      * @return array<int, array<string, mixed>>
      */
-    public function query(string $from, string $to, array $dimensions, array $filters = [], array $metrics = [], ?int $accountId = null, ?int $projectId = null): array
+    public function query(string $from, string $to, array $dimensions, array $filters = [], array $metrics = [], ?int $accountId = null, ?int $projectId = null, array $measures = []): array
     {
         $query = self::usage($from, $to)
             ->whereIn('metric', $metrics === [] ? UsageMetric::delivery() : array_values($metrics));
@@ -314,7 +319,15 @@ class AnalyticsService
 
         // One row past the cap, so an oversized result can be refused rather than silently
         // truncated ({@see MetricsQueryData::MAX_ROWS}).
-        $rows = self::rows($query->selectRaw('sum(value) as value')->limit(MetricsQueryData::MAX_ROWS + 1));
+        $query->selectRaw(MetricMeasure::VALUE->selection());
+
+        foreach (array_unique($measures, SORT_REGULAR) as $measure) {
+            if ($measure !== MetricMeasure::VALUE) {
+                $query->selectRaw($measure->selection());
+            }
+        }
+
+        $rows = self::rows($query->limit(MetricsQueryData::MAX_ROWS + 1));
 
         // Refused here rather than in each controller: every read that goes through this method is
         // capped by the same number, including the batch endpoints, whose daily granularity can
@@ -468,6 +481,115 @@ class AnalyticsService
                 ->orderBy('date')
                 ->orderBy('video_ulid')
         );
+    }
+
+    /**
+     * Viewer addresses that more than one tracking id was served to — the read side of catching an
+     * account farm: one person opening many accounts to collect many free quotas fetches them all
+     * from the same place.
+     *
+     * A signal, never a verdict. Carrier-grade NAT puts thousands of phones behind one IPv4, and a
+     * household, an office or a campus shares an address honestly; `days` and `bytes` are what tell
+     * a farm (the same few ids, every day) from a mobile gateway (hundreds of ids, each once).
+     * Grouped by exact address: an IPv6 client rotating within its /64 shows up as several
+     * addresses, and grouping by prefix would need the prefix stored — the canonical text cannot be
+     * cut portably in SQL.
+     *
+     * Two reads. The first finds the addresses and their totals in one pass; the second lists the
+     * ids of those addresses only, through the address index, capped per address because a NAT
+     * gateway would otherwise answer with thousands.
+     *
+     * @return list<array{ip: string, country: string, tracking_id_count: int, bytes: float, days: int, tracking_ids: list<string>}>
+     */
+    public function sharedIps(string $from, string $to, int $projectId, int $minTrackingIds, int $limit, int $idsPerIp = self::SHARED_IP_IDS_PER_IP, ?int $maxTrackingIds = null): array
+    {
+        $attributed = fn () => $this->bandwidth($from, $to, null, null, null, $projectId)
+            ->where('tracking_id', '!=', '')
+            ->where('ip', '!=', '');
+
+        $grouped = $attributed()
+            ->select('ip')
+            ->selectRaw('max(country) as country')
+            ->selectRaw('count(distinct tracking_id) as tracking_id_count')
+            ->selectRaw('sum(value) as bytes')
+            ->selectRaw('count(distinct date) as days')
+            ->groupBy('ip')
+            ->havingRaw('count(distinct tracking_id) >= ?', [$minTrackingIds]);
+
+        // The ceiling is applied before the limit, in SQL: filtered afterwards, the gateways shared
+        // by thousands would have taken the page and left nothing to filter down to.
+        if ($maxTrackingIds !== null) {
+            $grouped->havingRaw('count(distinct tracking_id) <= ?', [$maxTrackingIds]);
+        }
+
+        $addresses = self::rows(
+            $grouped
+                ->orderByDesc('tracking_id_count')
+                ->orderByDesc('bytes')
+                ->limit($limit)
+        );
+
+        if ($addresses === []) {
+            return [];
+        }
+
+        // Each address's ids, heaviest first, cut at `$idsPerIp` in PHP: a per-group limit is a
+        // window function, and the rows are few once narrowed to these addresses.
+        $ids = [];
+        foreach (self::rows(
+            $attributed()
+                ->whereIn('ip', array_column($addresses, 'ip'))
+                ->select('ip', 'tracking_id')
+                ->selectRaw('sum(value) as bytes')
+                ->groupBy('ip', 'tracking_id')
+                ->orderByDesc('bytes')
+        ) as $row) {
+            if (count($ids[$row['ip']] ?? []) < $idsPerIp) {
+                $ids[$row['ip']][] = $row['tracking_id'];
+            }
+        }
+
+        return array_map(fn (array $row) => [
+            'ip' => $row['ip'],
+            'country' => (string) $row['country'],
+            'tracking_id_count' => (int) $row['tracking_id_count'],
+            'bytes' => (float) $row['bytes'],
+            'days' => (int) $row['days'],
+            'tracking_ids' => $ids[$row['ip']] ?? [],
+        ], $addresses);
+    }
+
+    /**
+     * Every address one tracking id was served to, with its bytes and how many days it was seen —
+     * the other direction of {@see sharedIps()}: given a suspicious account, where it watches from.
+     * Through the tracking id index, so it reads that id's rows and nothing else.
+     *
+     * @return list<array{ip: string, country: string, bytes: float, requests: int, days: int, first_seen: string, last_seen: string}>
+     */
+    public function trackingIdIps(string $from, string $to, int $projectId, string $trackingId, int $limit): array
+    {
+        return array_map(fn (array $row) => [
+            'ip' => $row['ip'],
+            'country' => (string) $row['country'],
+            'bytes' => (float) $row['bytes'],
+            'requests' => (int) $row['requests'],
+            'days' => (int) $row['days'],
+            'first_seen' => (string) $row['first_seen'],
+            'last_seen' => (string) $row['last_seen'],
+        ], self::rows(
+            $this->bandwidth($from, $to, null, $trackingId, null, $projectId)
+                ->where('ip', '!=', '')
+                ->select('ip')
+                ->selectRaw('max(country) as country')
+                ->selectRaw('sum(value) as bytes')
+                ->selectRaw('sum(requests) as requests')
+                ->selectRaw('count(distinct date) as days')
+                ->selectRaw('min(date) as first_seen')
+                ->selectRaw('max(date) as last_seen')
+                ->groupBy('ip')
+                ->orderByDesc('bytes')
+                ->limit($limit)
+        ));
     }
 
     /**

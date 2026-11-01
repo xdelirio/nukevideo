@@ -11,6 +11,7 @@
 
 use App\Data\Analytics\MetricsQueryData;
 use App\Enums\MetricDimension;
+use App\Enums\MetricMeasure;
 use App\Jobs\IngestBandwidthJob;
 use App\Services\AnalyticsService;
 use App\Services\UsageService;
@@ -183,6 +184,29 @@ it('filters the general query by the lists it is given, and pins it to an accoun
     $uploads = $this->service->query('2026-04-01', '2026-04-30', [MetricDimension::EXTERNAL_USER_ID], metrics: ['upload_bytes'], accountId: 1);
 
     expect(array_column($uploads, 'value', 'external_user_id'))->toEqual(['cliente-77' => 4096]);
+});
+
+it('measures requests and distinct viewers per group, beside the sum', function () {
+    $rows = $this->service->query('2026-04-01', '2026-04-30', [MetricDimension::VIDEO], projectId: 1, measures: [
+        MetricMeasure::REQUESTS, MetricMeasure::UNIQUE_IPS, MetricMeasure::UNIQUE_TRACKING_IDS,
+    ]);
+
+    expect(array_map(fn (array $row) => [$row['video'], (int) $row['value'], (int) $row['requests'], (int) $row['unique_ips'], (int) $row['unique_tracking_ids']], $rows))->toBe([
+        // Two viewers, two tracking ids, one request each.
+        [VIDEO_A, 150, 2, 2, 2],
+        [VIDEO_B, 30, 1, 1, 1],
+        // Unattributed traffic is real bytes and a real request, but not a tracked viewer.
+        [VIDEO_C, 5, 1, 1, 0],
+    ]);
+});
+
+it('books upload volume and encoding time against their video, so both read per title', function () {
+    UsageService::record(1, 'encoding_cpu', 30, projectId: 1, videoUlid: VIDEO_B);
+    UsageService::record(1, 'encoding_cpu', 12, projectId: 1, videoUlid: VIDEO_B);
+
+    $rows = $this->service->query(now()->format('Y-m-d'), now()->format('Y-m-d'), [MetricDimension::VIDEO], metrics: ['encoding_cpu'], accountId: 1, projectId: 1);
+
+    expect(array_column($rows, 'value', 'video'))->toEqual([VIDEO_B => 42]);
 });
 
 it('refuses a result past the row cap instead of truncating it', function () {

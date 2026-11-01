@@ -103,3 +103,19 @@ it('clamps the page size to the cap instead of refusing it', function () {
     $this->getJson('/api/videos?perPage=0')->assertOk()->assertJsonPath('perPage', 1);
     $this->getJson('/api/videos?perPage=abc')->assertStatus(422)->assertJsonValidationErrors(['perPage']);
 });
+
+it('lists only what changed since a given instant, for an integration keeping its own copy in sync', function () {
+    $old = listedVideo('old');
+    $old->forceFill(['updated_at' => now()->subDays(3)])->saveQuietly();
+    $changed = listedVideo('changed');
+    $changed->forceFill(['updated_at' => now()->subHour()])->saveQuietly();
+
+    $since = urlencode(now()->subDay()->toIso8601String());
+
+    expect(listedNames("updatedSince={$since}&sort=updated_at&direction=asc"))->toBe(['changed'])
+        ->and($this->getJson('/api/videos')->json('data.0.updatedAt'))->not->toBeNull();
+});
+
+it('rejects an updatedSince that is not a date', function () {
+    $this->getJson('/api/videos?updatedSince=yesterday-ish')->assertStatus(422)->assertJsonValidationErrors('updatedSince');
+});

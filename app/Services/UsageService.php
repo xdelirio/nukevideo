@@ -45,13 +45,18 @@ class UsageService
 
     /**
      * `$projectId` is not optional in practice, only in signature: upload volume and encoding
-     * seconds carry no `video_ulid`, so without it two projects of the same account land on one
-     * row and the split is lost for good. 0 means "no project".
+     * seconds written without a `video_ulid` (every row before it was passed) have nothing else to
+     * tell two projects of the same account apart, so without it they land on one row and the
+     * split is lost for good. 0 means "no project".
+     *
+     * `$videoUlid` is the video the upload or the encoding was for, so both can be reported per
+     * title. Rows written before it was passed carry none, and that history cannot be split after
+     * the fact: it was folded into one row per account and day.
      *
      * Never throws. Both callers are recording a side effect of work that already happened — an
      * upload received, a chunk encoded — and losing the number is better than failing the work.
      */
-    public static function record(int $userId, string $metric, float $value, string $externalUserId = '', int $projectId = 0): void
+    public static function record(int $userId, string $metric, float $value, string $externalUserId = '', int $projectId = 0, string $videoUlid = ''): void
     {
         try {
             self::add([[
@@ -60,6 +65,7 @@ class UsageService
                 'user_id' => $userId,
                 'metric' => $metric,
                 'external_user_id' => $externalUserId,
+                'video_ulid' => $videoUlid,
                 'value' => $value,
             ]]);
         } catch (\Throwable $e) {

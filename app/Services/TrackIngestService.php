@@ -109,6 +109,7 @@ class TrackIngestService
             $size,
             $meta->externalUserId ?? $video->external_user_id ?? '',
             (int) $video->project_id,
+            $video->ulid,
         );
 
         $this->uploads->forgetUploadMeta($key);
