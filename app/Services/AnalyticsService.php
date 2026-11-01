@@ -501,7 +501,7 @@ class AnalyticsService
      *
      * @return list<array{ip: string, country: string, tracking_id_count: int, bytes: float, days: int, tracking_ids: list<string>}>
      */
-    public function sharedIps(string $from, string $to, int $projectId, int $minTrackingIds, int $limit, int $idsPerIp = self::SHARED_IP_IDS_PER_IP, ?int $maxTrackingIds = null): array
+    public function sharedIps(string $from, string $to, int $projectId, int $minTrackingIds, int $limit, int $idsPerIp = self::SHARED_IP_IDS_PER_IP, ?int $maxTrackingIds = null, int $offset = 0): array
     {
         $attributed = fn () => $this->bandwidth($from, $to, null, null, null, $projectId)
             ->where('tracking_id', '!=', '')
@@ -522,10 +522,15 @@ class AnalyticsService
             $grouped->havingRaw('count(distinct tracking_id) <= ?', [$maxTrackingIds]);
         }
 
+        // The address closes the order so it is total: with ties on count and bytes left to the
+        // engine, two reads of the same data may order them differently, and paging by offset
+        // would repeat some rows and skip others.
         $addresses = self::rows(
             $grouped
                 ->orderByDesc('tracking_id_count')
                 ->orderByDesc('bytes')
+                ->orderBy('ip')
+                ->offset($offset)
                 ->limit($limit)
         );
 

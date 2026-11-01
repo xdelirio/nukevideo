@@ -295,6 +295,7 @@ to: string,
 minTrackingIds: number | null,
 maxTrackingIds: number | null,
 limit: number | null,
+offset: number | null,
 };
 export type TopExternalUserData = {
 externalUserId: string,

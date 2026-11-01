@@ -83,6 +83,22 @@ it('leaves out addresses shared past a ceiling, before the limit takes the page'
         ->toBe(['10.0.0.2']);
 });
 
+it('pages through the report in a total order, the address breaking ties', function () {
+    // Two addresses tied on count and bytes: only the address can order them.
+    UsageService::add(array_merge(...array_map(fn (string $ip) => array_map(fn (int $i) => [
+        'date' => '2026-04-10', 'project_id' => $this->project->id, 'user_id' => $this->project->user_id, 'metric' => 'streaming_bytes',
+        'ip' => $ip, 'tracking_id' => "{$ip}-{$i}", 'value' => 10,
+    ], [1, 2]), ['10.0.0.20', '10.0.0.3'])));
+
+    $page = fn (int $offset) => collect($this->getJson("/api/analytics/shared-ips?from=2026-04-01&to=2026-04-30&minTrackingIds=2&limit=2&offset={$offset}")->json('data'))->pluck('ip')->all();
+
+    expect($page(0))->toBe(['10.0.0.1', '10.0.0.2'])
+        ->and($page(2))->toBe(['10.0.0.20', '10.0.0.3'])
+        ->and($page(4))->toBe([]);
+
+    $this->getJson('/api/analytics/shared-ips?from=2026-04-01&to=2026-04-30&offset=-1')->assertStatus(422)->assertJsonValidationErrors('offset');
+});
+
 it('refuses a ceiling below the floor, which could only answer empty', function (string $query) {
     $this->getJson("/api/analytics/shared-ips?from=2026-04-01&to=2026-04-30&{$query}")->assertStatus(422)->assertJsonValidationErrors('maxTrackingIds');
 })->with([

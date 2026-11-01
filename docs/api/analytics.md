@@ -450,6 +450,7 @@ GET /api/analytics/shared-ips?from=2026-04-01&to=2026-04-30&minTrackingIds=2&max
 | `minTrackingIds` | integer | How many distinct tracking ids an address needs to be listed. Default `3`, minimum `2` |
 | `maxTrackingIds` | integer | Leave out addresses shared by more ids than this — a carrier NAT, a campus or a VPN serves hundreds. At least `minTrackingIds`. Omitted, no ceiling |
 | `limit` | integer | How many addresses. Default `100`, maximum `1000` |
+| `offset` | integer | Addresses to skip, for the next page. Default `0` |
 
 ```json
 { "data": [
@@ -458,7 +459,10 @@ GET /api/analytics/shared-ips?from=2026-04-01&to=2026-04-30&minTrackingIds=2&max
 ] }
 ```
 
-Ordered by `trackingIdCount`, then bytes. `trackingIds` lists up to 50 per address, heaviest first;
+Ordered by `trackingIdCount`, then bytes, then `ip`, so pages read with `offset` neither repeat nor
+skip an address — provided `to` is before today: today's traffic is still being added, and bytes
+that move between two reads can shift a row across a page boundary. A page shorter than `limit` is
+the last. `trackingIds` lists up to 50 per address, heaviest first;
 `trackingIdCount` is always exact. Unattributed traffic is left out.
 
 ::: warning A signal, not a verdict

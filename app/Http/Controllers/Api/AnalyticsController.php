@@ -205,7 +205,7 @@ class AnalyticsController extends Controller
                 'bytes' => $row['bytes'],
                 'days' => $row['days'],
                 'trackingIds' => $row['tracking_ids'],
-            ], $this->analyticsService->sharedIps($query->from, $query->to, $request->project()->id, $query->minimum(), $query->size(), maxTrackingIds: $query->maxTrackingIds))),
+            ], $this->analyticsService->sharedIps($query->from, $query->to, $request->project()->id, $query->minimum(), $query->size(), maxTrackingIds: $query->maxTrackingIds, offset: $query->skip()))),
         ]);
     }
 
