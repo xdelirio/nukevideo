@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
+import { Switch } from '@/components/ui/switch'
 import { ApiException } from '@/exceptions/ApiException'
 import { ValidationException } from '@/exceptions/ValidationException'
 import CdnSettingsService from '@/services/CdnSettingsService'
@@ -123,6 +124,21 @@ onMounted(fetchSettings)
               its own lifetime with <code>expiresIn</code> (up to 7 days).
             </p>
             <p v-if="errors['selfHosted.tokenWindow']" class="text-sm text-destructive">{{ errors['selfHosted.tokenWindow'][0] }}</p>
+          </div>
+          <div class="grid gap-2">
+            <div class="flex items-center gap-3">
+              <Switch id="sh_bind_ip" v-model="form.selfHosted.bindIp" />
+              <Label for="sh_bind_ip">Bind playback links to the viewer's IP</Label>
+            </div>
+            <p class="text-sm text-muted-foreground">
+              The edge refuses a playback link fetched from any address but the one it was minted
+              for, so a shared link stops working. Integrations must mint with the viewer's
+              <code>ip</code>, or every link is bound to their own server. A viewer whose address
+              changes mid-session (Wi-Fi to mobile data, IPv4 to IPv6) has to request a new link.
+              Downloads are not bound. Applies to links minted from then on; turning it off does
+              not release links already bound until they expire.
+            </p>
+            <p v-if="errors['selfHosted.bindIp']" class="text-sm text-destructive">{{ errors['selfHosted.bindIp'][0] }}</p>
           </div>
           <p class="text-xs text-muted-foreground">
             The edge cache is not sized here: each proxy node caches into its own disk pool and

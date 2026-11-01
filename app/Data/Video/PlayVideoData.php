@@ -34,10 +34,11 @@ class PlayVideoData extends RequestData
         #[Min(144), Max(4320)]
         public ?int $resolution = null,
         /**
-         * The address that will fetch the manifests, when minting from your own backend. Neither
-         * provider enforces it: Bunny leaves it out of the signature ({@see BunnyProvider}), and
-         * the self-hosted edge signs it into the token but never checks it
-         * ({@see SelfHostedProvider::sign}). A wrong address costs nothing — and buys nothing.
+         * The address that will fetch the manifests, when minting from your own backend. Bunny
+         * leaves it out of the signature ({@see BunnyProvider}). The self-hosted edge signs it into
+         * the token only when the operator turns on `bindIp`, and the edge then refuses the link
+         * from any other address ({@see SelfHostedProvider::sign}) — so with that on, a wrong
+         * address is a link that never plays.
          */
         #[IP]
         public ?string $ip = null,

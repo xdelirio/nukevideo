@@ -31,6 +31,7 @@ class CdnSettingsController extends Controller
             'selfHosted.tokenSecret' => ['nullable', 'string'],
             'selfHosted.tokenName' => [Rule::requiredIf($selfHostedActive), 'string', 'regex:/^[a-z0-9_]+$/'],
             'selfHosted.tokenWindow' => [Rule::requiredIf($selfHostedActive), 'integer', 'min:1'],
+            'selfHosted.bindIp' => ['sometimes', 'boolean'],
 
             'bunny' => [Rule::requiredIf($bunnyActive), 'array'],
             'bunny.host' => [Rule::requiredIf($bunnyActive), 'string'],
@@ -47,6 +48,7 @@ class CdnSettingsController extends Controller
                 'token_secret' => $validated['selfHosted']['tokenSecret'] ?? null,
                 'token_name' => $validated['selfHosted']['tokenName'] ?? null,
                 'token_window' => isset($validated['selfHosted']['tokenWindow']) ? (int) $validated['selfHosted']['tokenWindow'] : null,
+                'bind_ip' => isset($validated['selfHosted']['bindIp']) ? (bool) $validated['selfHosted']['bindIp'] : null,
             ], fn ($v) => $v !== null));
         }
 

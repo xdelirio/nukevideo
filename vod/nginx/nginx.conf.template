@@ -289,7 +289,8 @@ http {
             # a playback session back to the link the API minted — and to the tracking id it was
             # minted for — so a per-manifest token from a `secure_token_akamai` block would leave
             # the segments, which are almost all the bytes, unattributable. The minted token already
-            # authorizes them: its ACL is the manifest's directory and the IP is the viewer's. The
+            # authorizes them: its ACL is the manifest's directory, and when the panel binds links
+            # to the viewer's IP the validator holds every segment to that `ip` field as well. The
             # cost is that segments expire with the link rather than on a window of their own.
             # `secure_token` takes any string with variables; it only appends what it is given.
             secure_token "${VOD_TOKEN_NAME}=$link_token";

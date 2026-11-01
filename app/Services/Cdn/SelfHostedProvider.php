@@ -111,11 +111,15 @@ class SelfHostedProvider implements CdnProvider
         $exp = now()->timestamp + ($expiresIn ?? $config->tokenWindow);
         $acl ??= $this->aclFor($url);
 
-        // The edge never parses `ip` (its token_fields are st/exp/acl only), so it is carried purely
-        // for parity with the playback links; a download omits it because nothing consumes it.
-        $authString = $ip === null
+        // The address goes in only when the operator binds links to it: the edge's validator
+        // refuses any token whose `ip` is not the requesting address, and has no switch of its own
+        // — the field's presence IS the switch. So the setting takes effect on the next mint, with
+        // no redeploy, and a link minted while it was on stays bound until it expires even after
+        // it is turned off. A download never carries it: one file a download manager may resume
+        // from anywhere.
+        $authString = $ip === null || ! $config->bindIp
             ? "exp={$exp}~acl={$acl}"
-            : "exp={$exp}~acl={$acl}~ip={$ip}";
+            : "exp={$exp}~acl={$acl}~ip=".self::canonicalIp($ip);
 
         if ($speedLimitKbps !== null) {
             $authString .= '~limit='.SpeedLimit::toBytesPerSecond($speedLimitKbps);
@@ -126,6 +130,29 @@ class SelfHostedProvider implements CdnProvider
         $separator = str_contains($url, '?') ? '&' : '?';
 
         return new SignedLink("{$url}{$separator}{$config->tokenName}={$token}", $token);
+    }
+
+    /**
+     * The address in the form nginx writes the client's in (`addr_text`, after `real_ip`), because
+     * the validator compares the two byte for byte: IPv6 compressed and lowercase
+     * (`2001:DB8:0:0::1` is `2001:db8::1`), and an IPv4-mapped address as the plain IPv4 the edge
+     * sees — `::ffff:203.0.113.7` is what a dual-stack Node backend reports for an IPv4 client.
+     * Anything that does not parse is signed as given: the request layer validates `ip`, and the
+     * caller's own address always parses.
+     */
+    private static function canonicalIp(string $ip): string
+    {
+        $binary = @inet_pton($ip);
+
+        if ($binary === false) {
+            return $ip;
+        }
+
+        if (strlen($binary) === 16 && str_starts_with($binary, str_repeat("\0", 10)."\xff\xff")) {
+            $binary = substr($binary, 12);
+        }
+
+        return (string) inet_ntop($binary);
     }
 
     /**

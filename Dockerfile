@@ -134,7 +134,10 @@ FROM alpine:3.20 AS proxy-builder
 
 ENV NGINX_VERSION=1.27.4
 ENV NGINX_AWS_AUTH_VERSION=1.1
-ENV NGINX_AKAMAI_TOKEN_VALIDATE_VERSION=1.1
+# A commit, not the 1.1 tag: 1.1 (2017) parses no `ip` field, and the check that refuses a token
+# from any other address than the one it names only exists on master (kaltura PR #22, 2021), which
+# was never tagged. The panel's "bind to the viewer's IP" setting relies on it.
+ENV NGINX_AKAMAI_TOKEN_VALIDATE_VERSION=818d94a712e6bbd32d9d086d2c96ccd98f79e438
 ENV NGINX_SECURE_TOKEN_VERSION=1.5
 
 RUN apk add --no-cache \
