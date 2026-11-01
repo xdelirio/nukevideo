@@ -5,7 +5,9 @@ on:
     tags: ["v*"]
 
 env:
-  IMAGE_PREFIX: ${{ github.repository }}
+  # The Docker Hub namespace the releases live in, and the one NodeService pulls from. Not
+  # github.repository: moving the repository to another owner must not move the images.
+  IMAGE_PREFIX: chikenare/nukevideo
 
 # Each platform builds natively on its own runner (no QEMU) and pushes by digest;
 # the merge job then assembles the multi-arch manifest with imagetools.
