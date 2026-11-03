@@ -2,6 +2,7 @@
 
 namespace App\Data;
 
+use App\Support\AllowedDomains;
 use Spatie\LaravelData\Data;
 
 class SelfHostedConfigData extends Data
@@ -16,5 +17,10 @@ class SelfHostedConfigData extends Data
         // dual-stack viewer who reached the API over IPv4 and the edge over IPv6 — and it only
         // works when integrators mint with the viewer's `ip`.
         public bool $bindIp = false,
+        // The sites whose pages the edges will serve; empty is no restriction. Written into the
+        // edge's nginx at deploy, unlike `bindIp`, so a change waits for a redeploy of the proxies.
+        // See {@see AllowedDomains}.
+        /** @var string[] */
+        public array $allowedDomains = [],
     ) {}
 }

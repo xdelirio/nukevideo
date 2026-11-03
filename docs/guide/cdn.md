@@ -15,7 +15,7 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 - Caches segments on the node's own disk pool so repeat requests don't hit S3 every time; **manifests are cached for 30 seconds** (each viewer still gets their own token written into them), and **downloads never enter it** (they are whole files, fetched once, and must keep supporting `Range` resumes). See [Cache disks](/guide/nodes#cache-disks).
 - Embeds the token a manifest was requested with into the segment URLs it rewrites, rather than minting one per manifest, so every request of a playback session carries the same token — the one the API recorded a caller's tracking id against. The token is logged and hashed on the node; nothing downstream sees it. See [Requesting a Playback URL](/guide/streaming#requesting-a-playback-url).
 - Logs, per request, what its cache did and what it fetched from the origin; the nodes page turns that into a hit ratio per node. Origin bytes are recorded under the `origin_bytes` metric and account `0` — the operator's cost, never a customer's usage.
-- Answers CORS itself, for any origin: the bucket's CORS rules play no part in self-hosted delivery, and one cached copy of a segment serves every embedding site.
+- Answers CORS itself: the bucket's CORS rules play no part in self-hosted delivery, and one cached copy of a segment serves every embedding site. Any site may embed unless you set [allowed domains](#allowed-domains).
 - Resolves the real client IP behind Cloudflare or another reverse proxy.
 - Ships access-log bandwidth to the API through a Vector.dev pipeline.
 
@@ -38,6 +38,43 @@ cannot be edited out of the URL.
   anywhere.
 - **It applies to links minted from then on**, with no redeploy. Turning it off does not release
   links minted while it was on: they stay bound until they expire.
+
+### Allowed domains
+
+By default any website can use a valid link. List domains under **Allowed domains** and the edge
+answers `403` to a request made from a page on any other site, on playback, downloads and assets
+alike. Leave the list empty for no restriction.
+
+- `example.com` matches that exact host, and `*.example.com` its subdomains but not `example.com`
+  itself. Ports are ignored.
+- **List the site whose page holds the player.** If the player sits in an iframe, list the iframe's
+  domain.
+- **Redeploy the proxy nodes to apply a change.** The list is written into the edge's nginx config
+  when the node deploys.
+- **The panel is always allowed**, through the hosts in `SANCTUM_STATEFUL_DOMAINS`, so it keeps
+  playing from its own origin.
+- **How the edge knows the page.** It reads `Origin`, then `Referer`. A request with neither is
+  refused only when `Sec-Fetch-Site` says a cross-site page made it, which covers a page that hides
+  its `Referer`.
+- **Your own pages must let the browser send a `Referer`.** On an allowed page with
+  `Referrer-Policy: no-referrer` or `same-origin`, a plain `<video src>`, an `<img>` or a download
+  link is refused like any other, and so is a link with `rel="noreferrer"` on any page. Set
+  `strict-origin-when-cross-origin`, the browser default, or `referrerpolicy` on the element.
+  Players built on hls.js, dash.js or Shaka are unaffected, since they send `Origin`.
+- **Links from other sites are refused too.** A download link clicked on an unlisted site gets a
+  `403`, as does a thumbnail in its `<img>`.
+- **List every web origin that plays for you.** Hybrid apps count: Capacitor sends
+  `capacitor://localhost`, which cannot be listed and is refused. A cast receiver page sends its own
+  origin too.
+- **A CDN in front answers from its own cache.** With a node proxied through Cloudflare, anything it
+  has cached is served without reaching the edge, so the list does not apply to those requests.
+- **It is about browsers.** Native apps, `curl` and other clients outside a browser send none of
+  these headers, or can forge them, and they pass. Links stay protected by their token: keep the
+  token window short, and consider [IP binding](#ip-binding).
+- **The exception is native HLS on iOS.** The system media player may fetch the stream without any
+  of these headers, and those requests cannot be told apart from a native app. For iPhones,
+  [IP binding](#ip-binding) is what stops a copied link.
+- A WebView page on `file://` sends `Origin: null` and is refused.
 
 **Choose self-hosted when** you want full control over delivery, keep traffic on your own infrastructure, need the built-in bandwidth analytics per node, or already run edge servers.
 
@@ -111,6 +148,7 @@ php artisan bunny:ingest-logs --from=2026-08-20T10:00:00Z
 | Origin | S3 (via AWS auth) | S3 pull-zone origin |
 | Token scheme | Akamai-style HMAC | HMAC-SHA256, directory mode |
 | IP binding | Optional, off by default ([IP binding](#ip-binding)) | Not IP-bound |
+| Allowed domains | Optional, in CDN Settings ([Allowed domains](#allowed-domains)) | Not managed here; set them in the Bunny pull zone |
 | Edge caching | Local nginx cache per node | Bunny global edge |
 | Bandwidth analytics | Built-in (Vector → API) | Built-in (Logging API poll) |
 

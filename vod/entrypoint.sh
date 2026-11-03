@@ -34,6 +34,47 @@ fi
 # Akamai name the signer also defaults to, so a node that predates this variable keeps working.
 export VOD_TOKEN_NAME="${VOD_TOKEN_NAME:-__hdnea__}"
 
+# ---- Allowed domains ----
+#
+# The sites whose pages this edge serves (CDN Settings, comma-separated), as the body of the `map`
+# that sets $origin_refused in the nginx config. A separate file rather than envsubst because the
+# number of lines depends on the list. The map's key is "<the page's URL>|<this edge's host>".
+#
+# A request naming no page is $anonymous_refused's to decide: anything outside a browser passes,
+# and so does a tab opened directly on the link. An Origin of `null` (a sandboxed iframe, a file://
+# page) matches no line and is refused.
+#
+# The edge's own host passes because a player may name the manifest it read as the Referer of the
+# segments. The trailing `(/[^|]*)?\|` is what stops `example.com.evil.example`, and a Referer that
+# merely mentions an allowed site in its path or query, from matching.
+#
+# An entry that is not a hostname is skipped rather than written: this file is nginx config, and
+# nginx -t failing on it would crashloop the edge over one bad line. The API validates the list
+# already, so this only guards against a hand-set variable. Skipping fails closed, since the
+# `default 1` still refuses that domain.
+ALLOWED_ORIGINS_CONF=/usr/local/nginx/conf/allowed-origins.conf
+if [ -z "${VOD_ALLOWED_DOMAINS:-}" ]; then
+    echo 'default 0;' > "$ALLOWED_ORIGINS_CONF"
+else
+    {
+        echo 'default 1;'
+        echo '"~^\|" $anonymous_refused;'
+        echo '"~*^https?://([^/:|]+)(:[0-9]+)?(/[^|]*)?\|\1$" 0;'
+        echo "$VOD_ALLOWED_DOMAINS" | tr ',' '\n' | while IFS= read -r domain; do
+            if ! echo "$domain" | grep -qE '^(\*\.)?[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'; then
+                echo "WARNING: ignoring VOD_ALLOWED_DOMAINS entry: $domain" >&2
+                continue
+            fi
+            case "$domain" in
+                \*.*) subdomains='([a-z0-9-]+\.)+' ;;
+                *) subdomains='' ;;
+            esac
+            host=$(echo "${domain#\*.}" | sed 's/\./\\./g')
+            echo "\"~*^https?://${subdomains}${host}(:[0-9]+)?(/[^|]*)?\\|\" 0;"
+        done
+    } > "$ALLOWED_ORIGINS_CONF"
+fi
+
 # ---- Cache sizing ----
 #
 # The cache is sized to the filesystem it sits on, not configured: a proxy node's deploy hands

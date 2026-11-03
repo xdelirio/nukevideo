@@ -107,6 +107,7 @@ tokenSecret: string,
 tokenName: string,
 tokenWindow: number,
 bindIp: boolean,
+allowedDomains: string[],
 };
 export type ServiceStatusData = {
 name: string,

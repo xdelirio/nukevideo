@@ -12,6 +12,7 @@ use App\Enums\NodeType;
 use App\Models\Node;
 use App\Settings\CdnSettings;
 use App\Settings\NodeSettings;
+use App\Support\AllowedDomains;
 use App\Support\Cpu;
 use Illuminate\Support\Facades\Log;
 
@@ -148,6 +149,7 @@ class NodeService
         $cdnEnv = [
             'VOD_TOKEN_SECRET' => $cdn->tokenSecret,
             'VOD_TOKEN_NAME' => $cdn->tokenName,
+            'VOD_ALLOWED_DOMAINS' => implode(',', AllowedDomains::forEdge($cdn->allowedDomains)),
         ];
         foreach ($cdnEnv as $key => $value) {
             if ($value !== '') {
@@ -193,6 +195,8 @@ class NodeService
         'WEBHOOK_SECRET',
         'VOD_TOKEN_SECRET',
         'VOD_TOKEN_NAME',
+        // One line in a node's env would otherwise exempt that edge from the operator's list.
+        'VOD_ALLOWED_DOMAINS',
         'AWS_ACCESS_KEY_ID',
         'AWS_SECRET_ACCESS_KEY',
         'AWS_BUCKET',
