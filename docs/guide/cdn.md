@@ -16,6 +16,9 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 - Embeds the token a manifest was requested with into the segment URLs it rewrites, rather than minting one per manifest, so every request of a playback session carries the same token — the one the API recorded a caller's tracking id against. The token is logged and hashed on the node; nothing downstream sees it. See [Requesting a Playback URL](/guide/streaming#requesting-a-playback-url).
 - Logs, per request, what its cache did and what it fetched from the origin; the nodes page turns that into a hit ratio per node. Origin bytes are recorded under the `origin_bytes` metric and account `0` — the operator's cost, never a customer's usage.
 - Answers CORS itself: the bucket's CORS rules play no part in self-hosted delivery, and one cached copy of a segment serves every embedding site. Any site may embed unless you set [allowed domains](#allowed-domains).
+- Limits how fast one address can make it fetch unsigned assets from S3: 5 per second, with a burst of 200, and `429` beyond that. Only cache misses count, so a page full of thumbnails already cached is never limited.
+- Keeps serving what it has cached while S3 answers with errors or is unreachable.
+- Verifies the S3 endpoint's TLS certificate unless told not to with [`VOD_S3_TLS_VERIFY`](/guide/configuration#proxy-nodes).
 - Resolves the real client IP behind Cloudflare or another reverse proxy.
 - Ships access-log bandwidth to the API through a Vector.dev pipeline.
 

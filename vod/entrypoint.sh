@@ -34,6 +34,15 @@ fi
 # Akamai name the signer also defaults to, so a node that predates this variable keeps working.
 export VOD_TOKEN_NAME="${VOD_TOKEN_NAME:-__hdnea__}"
 
+# Whether the edge verifies an https S3 endpoint's certificate. On unless a node says otherwise,
+# for an endpoint with a private certificate. Anything but `off` means on: nginx refuses other
+# values, and a typo here should neither crashloop the edge nor turn the check off.
+if [ "${VOD_S3_TLS_VERIFY:-on}" = "off" ]; then
+    export VOD_S3_TLS_VERIFY=off
+else
+    export VOD_S3_TLS_VERIFY=on
+fi
+
 # ---- Allowed domains ----
 #
 # The sites whose pages this edge serves (CDN Settings, comma-separated), as the body of the `map`
@@ -144,7 +153,7 @@ echo "cache: $CACHE_DIR ${TOTAL_MB}MB total, max_size=$VOD_CACHE_MAX_SIZE min_fr
 # The node id only identifies the edge to the health probe; an edge run by hand has none.
 export NODE_ID="${NODE_ID:-0}"
 
-FILTER_VARS='$NODE_ID $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY $AWS_DEFAULT_REGION $AWS_ENDPOINT_SCHEME $AWS_ENDPOINT_HOST $AWS_ENDPOINT_SERVER $AWS_ENDPOINT_RESOLVE $EDGE_RESOLVER $AWS_BUCKET $VOD_CACHE_MAX_SIZE $VOD_CACHE_MIN_FREE $VOD_CACHE_KEYS_ZONE $VOD_CACHE_INACTIVE $VOD_TOKEN_SECRET $VOD_TOKEN_NAME'
+FILTER_VARS='$NODE_ID $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY $AWS_DEFAULT_REGION $AWS_ENDPOINT_SCHEME $AWS_ENDPOINT_HOST $AWS_ENDPOINT_SERVER $AWS_ENDPOINT_RESOLVE $EDGE_RESOLVER $AWS_BUCKET $VOD_CACHE_MAX_SIZE $VOD_CACHE_MIN_FREE $VOD_CACHE_KEYS_ZONE $VOD_CACHE_INACTIVE $VOD_TOKEN_SECRET $VOD_TOKEN_NAME $VOD_S3_TLS_VERIFY'
 envsubst "$FILTER_VARS" < /usr/local/nginx/conf/nginx.conf.template > /usr/local/nginx/conf/nginx.conf
 
 /usr/local/nginx/sbin/nginx -t

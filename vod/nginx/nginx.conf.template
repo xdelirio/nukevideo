@@ -121,6 +121,14 @@ http {
         include /usr/local/nginx/conf/allowed-origins.conf;
     }
 
+    # How fast one address can make this edge fetch unsigned assets from S3. Assets need no token, so
+    # a made-up ULID in the path was an S3 request anyone could send for free. Applied on the hop to
+    # S3, where only a cache miss arrives: at the front door it would also count the thumbnails of a
+    # listing page already cached, and a whole office behind one address loads a lot of those. The
+    # key is a header the assets location sets and the others clear, so nothing else is counted and
+    # a viewer cannot name a key of their own. The burst is a first visit to a page of cold images.
+    limit_req_zone $http_x_edge_asset_client zone=asset_misses:10m rate=5r/s;
+
     log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
                       '$status $body_bytes_sent "$http_referer" '
                       '"$http_user_agent" "$http_x_forwarded_for"';
@@ -142,6 +150,11 @@ http {
     # Traefik holds a pool of connections to this server and reuses them for every viewer; the
     # default 1000 requests recycled each of them every few seconds under load.
     keepalive_requests 10000;
+    # A client that stopped reading gives its socket buffers back at once, not after a FIN_WAIT.
+    reset_timedout_connection on;
+    # A player asks for one range. Many in a single request cost the edge far more than they cost
+    # the client, and past this limit nginx answers as if no range had been asked for.
+    max_ranges 1;
 
     # Sizes are computed by the entrypoint from the filesystem the cache sits on; see there for
     # what each one guards. The loader and manager are sped up from their defaults because the
@@ -178,7 +191,11 @@ http {
         set $link_token "";
 
         #access_log /dev/stdout main;
-        access_log /dev/stdout bandwidth;
+        # Buffered, because a write per request is a syscall per segment, and one that stalls the
+        # worker whenever the log driver falls behind. 4k and no more: stdout is a pipe shared by
+        # every worker, and only a write up to PIPE_BUF is atomic, so a larger buffer could
+        # interleave lines from two workers and cost Vector both. A crash loses a second of lines.
+        access_log /dev/stdout bandwidth buffer=4k flush=1s;
 
         # Delivery only reads. The hop below signs whatever it forwards with the bucket's
         # credentials, method included, so any other method would reach S3 as an authorised request.
@@ -232,6 +249,8 @@ http {
             proxy_cache_valid 200 30d;
             proxy_cache_valid 404 1m;
             proxy_cache_lock on;
+            proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+            proxy_set_header X-Edge-Asset-Client $remote_addr;
             proxy_ignore_headers Cache-Control Expires Set-Cookie Vary;
             add_header Cache-Control "public, max-age=604800" always;
             add_header X-Cache-Status $upstream_cache_status always;
@@ -281,6 +300,8 @@ http {
             # Per request, so a download manager opening four ranged connections gets four times
             # it; the upstream read is paced by the client either way (no temp file, above).
             limit_rate $link_limit;
+
+            proxy_set_header X-Edge-Asset-Client "";
 
             add_header X-Cache-Status "OFF" always;
             # A download is meant to land on disk, not in a player tab. The panel lives on another
@@ -365,7 +386,16 @@ http {
             # small writes for one segment.
             proxy_buffer_size 64k;
             proxy_buffers 16 64k;
-            proxy_cache_use_stale error timeout updating;
+            # The http_5xx are what cover an S3 outage. S3 is reached through the loopback hop, which
+            # answers a failure with a status, so `error` and `timeout` alone never see one.
+            #
+            # No `proxy_cache_background_update`, tempting as it is for a manifest that expires every
+            # 30 seconds. nginx holds the next request on the same connection until the update ends
+            # (trac #1723, wontfix), and every connection here is one Traefik reuses for all its
+            # viewers: an unrelated viewer's segment would wait on S3, for up to a proxy timeout
+            # when S3 hangs. Without it one viewer waits for the refresh and `updating` serves the rest.
+            proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+            proxy_set_header X-Edge-Asset-Client "";
             proxy_cache_lock on;
             proxy_cache_lock_timeout 30s;
             proxy_cache_lock_age 30s;
@@ -422,6 +452,12 @@ http {
             # Unused while buffering is off, but nginx validates them against the buffer size.
             proxy_buffers 4 64k;
 
+            # `notice` sits below the `warn` this nginx logs at: an address being limited is the
+            # limit working, and it should not be able to fill the log it is shipped through.
+            limit_req zone=asset_misses burst=200 nodelay;
+            limit_req_status 429;
+            limit_req_log_level notice;
+
             add_header X-Accel-Expires $manifest_ttl;
 
             proxy_pass ${AWS_ENDPOINT_SCHEME}://s3_origin;
@@ -429,10 +465,16 @@ http {
             proxy_set_header Connection "";
             proxy_ssl_server_name on;
             proxy_ssl_name ${AWS_ENDPOINT_HOST};
+            # Without this anyone on the path could stand in for the bucket and have this edge cache
+            # and serve what they chose. The depth is for the intermediates of a public chain.
+            proxy_ssl_verify ${VOD_S3_TLS_VERIFY};
+            proxy_ssl_verify_depth 4;
+            proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
             proxy_set_header Host ${AWS_ENDPOINT_HOST};
             # The bucket must not see the viewer's origin: its CORS answer is dropped anyway, and
             # a bucket that varies its response on it would defeat the single cached copy.
             proxy_set_header Origin "";
+            proxy_set_header X-Edge-Asset-Client "";
             proxy_set_header X-Amz-Date $aws_auth_date;
             proxy_set_header X-Amz-Content-SHA256 UNSIGNED-PAYLOAD;
             proxy_set_header Authorization $aws_token;

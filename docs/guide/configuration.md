@@ -156,6 +156,10 @@ Everything here is applied when the container is created, so a change takes effe
 
 Proxy containers receive the [S3 Storage](#s3-storage) variables (to read packaged CMAF from the bucket) plus the token settings from [Proxy Node Delivery](#proxy-node-delivery), which are sourced from the CDN Settings panel.
 
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VOD_S3_TLS_VERIFY` | `on` | Whether the edge verifies the certificate of an `https` S3 endpoint against the system CAs. Set it to `off` only for an endpoint with a private or self-signed certificate: with `on`, such an endpoint fails every cache miss with a `502`. |
+
 #### Proxy cache
 
 The edge sizes its segment cache to the filesystem it is given on every boot. These override the result; sizes take `m` or `g` (nginx does not parse `t`).
