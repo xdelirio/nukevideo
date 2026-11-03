@@ -6,6 +6,7 @@ use App\Data\CdnSettingsData;
 use App\Enums\CdnDriver;
 use App\Http\Controllers\Controller;
 use App\Settings\CdnSettings;
+use App\Support\AllowedDomains;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -32,6 +33,8 @@ class CdnSettingsController extends Controller
             'selfHosted.tokenName' => [Rule::requiredIf($selfHostedActive), 'string', 'regex:/^[a-z0-9_]+$/'],
             'selfHosted.tokenWindow' => [Rule::requiredIf($selfHostedActive), 'integer', 'min:1'],
             'selfHosted.bindIp' => ['sometimes', 'boolean'],
+            'selfHosted.allowedDomains' => ['sometimes', 'array', 'max:'.AllowedDomains::MAX],
+            'selfHosted.allowedDomains.*' => ['string', 'regex:'.AllowedDomains::pattern()],
 
             'bunny' => [Rule::requiredIf($bunnyActive), 'array'],
             'bunny.host' => [Rule::requiredIf($bunnyActive), 'string'],
@@ -39,6 +42,8 @@ class CdnSettingsController extends Controller
             'bunny.tokenWindow' => [Rule::requiredIf($bunnyActive), 'integer', 'min:1'],
             'bunny.apiKey' => ['nullable', 'string'],
             'bunny.pullZoneId' => ['nullable', 'string'],
+        ], [
+            'selfHosted.allowedDomains.*.regex' => 'Each domain must be a bare hostname, like example.com or *.example.com. ":input" is not.',
         ]);
 
         $providers = $settings->providers;
@@ -49,6 +54,9 @@ class CdnSettingsController extends Controller
                 'token_name' => $validated['selfHosted']['tokenName'] ?? null,
                 'token_window' => isset($validated['selfHosted']['tokenWindow']) ? (int) $validated['selfHosted']['tokenWindow'] : null,
                 'bind_ip' => isset($validated['selfHosted']['bindIp']) ? (bool) $validated['selfHosted']['bindIp'] : null,
+                // An empty list survives the filter below, which only drops null: it is how the
+                // restriction gets lifted.
+                'allowed_domains' => isset($validated['selfHosted']['allowedDomains']) ? AllowedDomains::normalize($validated['selfHosted']['allowedDomains']) : null,
             ], fn ($v) => $v !== null));
         }
 

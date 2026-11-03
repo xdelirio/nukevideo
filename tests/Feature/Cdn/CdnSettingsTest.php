@@ -42,3 +42,35 @@ it('keeps the binding when a save does not mention it', function () use ($selfHo
 it('refuses a value that is not a boolean', function () use ($selfHosted) {
     $this->patchJson('/api/cdn-settings', $selfHosted(['bindIp' => 'sometimes']))->assertStatus(422)->assertJsonValidationErrors('selfHosted.bindIp');
 });
+
+it('stores the allowed domains lowercased and without repeats, and reads them back', function () use ($selfHosted) {
+    $this->getJson('/api/cdn-settings')->assertJsonPath('data.selfHosted.allowedDomains', []);
+
+    $this->patchJson('/api/cdn-settings', $selfHosted(['allowedDomains' => ['Example.com', '*.example.com', 'example.com']]))
+        ->assertOk()
+        ->assertJsonPath('data.selfHosted.allowedDomains', ['example.com', '*.example.com']);
+
+    expect(app(CdnSettings::class)->providers['self_hosted']['allowed_domains'])->toBe(['example.com', '*.example.com']);
+});
+
+it('keeps the allowed domains when a save does not mention them, and clears them when told to', function () use ($selfHosted) {
+    $this->patchJson('/api/cdn-settings', $selfHosted(['allowedDomains' => ['example.com']]))->assertOk();
+
+    $this->patchJson('/api/cdn-settings', $selfHosted())->assertOk()->assertJsonPath('data.selfHosted.allowedDomains', ['example.com']);
+
+    $this->patchJson('/api/cdn-settings', $selfHosted(['allowedDomains' => []]))->assertOk()->assertJsonPath('data.selfHosted.allowedDomains', []);
+});
+
+it('refuses what is not a bare hostname', function (string $domain) use ($selfHosted) {
+    $this->patchJson('/api/cdn-settings', $selfHosted(['allowedDomains' => [$domain]]))
+        ->assertStatus(422)
+        ->assertJsonValidationErrors(['selfHosted.allowedDomains.0' => 'bare hostname']);
+})->with([
+    'a url' => 'https://example.com',
+    'a path' => 'example.com/videos',
+    'a port' => 'example.com:8443',
+    'a bare wildcard' => '*',
+    'a wildcard over a whole tld' => '*.com',
+    'a wildcard mid-name' => 'foo.*.example.com',
+    'something aimed at the nginx config' => 'example.com" 0; } #',
+]);

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -23,10 +23,24 @@ const loading = ref(true)
 const saving = ref(false)
 const errors = ref<Record<string, string[]>>({})
 
+// Text, not the form's array: splitting on every keystroke would swallow the newline being typed.
+const allowedDomains = ref('')
+
+// The API reports a bad entry by its position, and the textarea has one field to show it under.
+const allowedDomainsError = computed(() => {
+  const key = Object.keys(errors.value).find((k) => k.startsWith('selfHosted.allowedDomains'))
+  return key ? errors.value[key]?.[0] : undefined
+})
+
+function setForm(settings: App.Data.CdnSettingsData) {
+  form.value = settings
+  allowedDomains.value = settings.selfHosted.allowedDomains.join('\n')
+}
+
 async function fetchSettings() {
   loading.value = true
   try {
-    form.value = await CdnSettingsService.get()
+    setForm(await CdnSettingsService.get())
   } catch (error) {
     if (error instanceof ApiException) {
       toast.error(error.message)
@@ -43,9 +57,18 @@ async function handleSave() {
   try {
     const payload =
       form.value.provider === 'self_hosted'
-        ? { provider: form.value.provider, selfHosted: form.value.selfHosted }
+        ? {
+            provider: form.value.provider,
+            selfHosted: {
+              ...form.value.selfHosted,
+              allowedDomains: allowedDomains.value
+                .split('\n')
+                .map((domain) => domain.trim())
+                .filter(Boolean),
+            },
+          }
         : { provider: form.value.provider, bunny: form.value.bunny }
-    form.value = await CdnSettingsService.update(payload)
+    setForm(await CdnSettingsService.update(payload))
     toast.success('CDN settings saved')
   } catch (error) {
     if (error instanceof ValidationException) {
@@ -139,6 +162,25 @@ onMounted(fetchSettings)
               not release links already bound until they expire.
             </p>
             <p v-if="errors['selfHosted.bindIp']" class="text-sm text-destructive">{{ errors['selfHosted.bindIp'][0] }}</p>
+          </div>
+          <div class="grid gap-2">
+            <Label for="sh_allowed_domains">Allowed domains</Label>
+            <textarea
+              id="sh_allowed_domains"
+              v-model="allowedDomains"
+              rows="4"
+              spellcheck="false"
+              placeholder="example.com&#10;*.example.com"
+              class="border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 w-full rounded-md border bg-transparent px-3 py-2 font-mono text-sm shadow-xs outline-none focus-visible:ring-[3px]"
+            />
+            <p class="text-sm text-muted-foreground">
+              One per line. Only pages on these sites can play your videos; leave empty to allow
+              any site. <code>*.example.com</code> covers subdomains but not
+              <code>example.com</code> itself. The panel is always allowed. The list is written
+              into the edge's nginx config, so a change only applies once the proxy nodes are
+              redeployed.
+            </p>
+            <p v-if="allowedDomainsError" class="text-sm text-destructive">{{ allowedDomainsError }}</p>
           </div>
           <p class="text-xs text-muted-foreground">
             The edge cache is not sized here: each proxy node caches into its own disk pool and

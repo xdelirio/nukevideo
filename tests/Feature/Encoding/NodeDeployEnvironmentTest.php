@@ -264,6 +264,49 @@ describe('edge token settings', function () {
 
         expect($env)->toContain('VOD_TOKEN_NAME=__hdnea__');
     });
+
+    it('hands the edge no domain list while none is configured', function () {
+        fakeCdnProvider('self_hosted');
+        config()->set('sanctum.stateful', ['panel.example.com']);
+
+        $env = app(NodeService::class)->getEnvironmentVariables(
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
+        );
+
+        expect(implode("\n", $env))->not->toContain('VOD_ALLOWED_DOMAINS');
+    });
+
+    it('hands the edge the allowed domains plus the panel, which must keep playing', function () {
+        CdnSettings::fake([
+            'provider' => 'self_hosted',
+            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com', '*.site.example']]],
+        ]);
+        // What the default of SANCTUM_STATEFUL_DOMAINS looks like, plus a panel on its own port.
+        // The loopback names are nobody's panel in production, and any page on a viewer's machine
+        // could claim them.
+        config()->set('sanctum.stateful', ['localhost', 'localhost:3000', '127.0.0.1', '127.0.0.1:8000', '::1', 'Panel.example.org:8443', 'example.com']);
+
+        $env = app(NodeService::class)->getEnvironmentVariables(
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
+        );
+
+        expect($env)->toContain('VOD_ALLOWED_DOMAINS=example.com,*.site.example,panel.example.org');
+    });
+
+    it('does not let a node override loosen the allowed domains', function () {
+        CdnSettings::fake([
+            'provider' => 'self_hosted',
+            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com']]],
+        ]);
+        config()->set('sanctum.stateful', []);
+
+        $env = app(NodeService::class)->getEnvironmentVariables(
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'env' => 'VOD_ALLOWED_DOMAINS=evil.example'])
+        );
+
+        expect($env)->toContain('VOD_ALLOWED_DOMAINS=example.com')
+            ->and($env)->not->toContain('VOD_ALLOWED_DOMAINS=evil.example');
+    });
 });
 
 describe('name resolution inside the containers', function () {

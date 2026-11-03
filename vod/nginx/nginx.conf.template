@@ -97,6 +97,30 @@ http {
         default                          0;
     }
 
+    # The page asking, as the browser names it. A script's fetch (hls.js, dash.js, Shaka) carries
+    # Origin; a <video src>, an <img> or a link carries only the Referer.
+    map $http_origin $page_url {
+        ""       $http_referer;
+        default  $http_origin;
+    }
+
+    # A request naming no page. A foreign page can hide its Referer (`<meta name="referrer"
+    # content="no-referrer">`), but it cannot touch Sec-Fetch-Site, which the browser sets itself.
+    # Refusing every anonymous request instead would also cut off native apps and links opened
+    # directly, neither of which is another website using the link.
+    map $http_sec_fetch_site $anonymous_refused {
+        "cross-site"  1;
+        default       0;
+    }
+
+    # Whether the page asking is on a site this edge may not serve. The lines are the operator's
+    # list from CDN Settings, written by the entrypoint at boot; see there for what passes and why.
+    # Read before the cache and the token, and never part of the cache key, so one cached copy of a
+    # segment still serves every allowed site.
+    map "$page_url|$host" $origin_refused {
+        include /usr/local/nginx/conf/allowed-origins.conf;
+    }
+
     log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
                       '$status $body_bytes_sent "$http_referer" '
                       '"$http_user_agent" "$http_x_forwarded_for"';
@@ -156,6 +180,20 @@ http {
         #access_log /dev/stdout main;
         access_log /dev/stdout bandwidth;
 
+        # Delivery only reads. The hop below signs whatever it forwards with the bucket's
+        # credentials, method included, so any other method would reach S3 as an authorised request.
+        # At server level so that no location, present or future, can leave it out.
+        if ($request_method !~ ^(GET|HEAD|OPTIONS)$) {
+            return 405;
+        }
+
+        # At server level so no location can forget it, preflights included: a refused page gets a
+        # 403 with no CORS headers, which its player reports as a network error. The liveness probe
+        # carries no Origin and passes.
+        if ($origin_refused) {
+            return 403;
+        }
+
         # The liveness probe (`nodes:probe` on the API host). Unsigned like the assets, and
         # answered with a header only this nginx sets: a 200 from Traefik, Cloudflare or a
         # stray default vhost is not the edge being up, and the probe requires the header.
@@ -199,7 +237,7 @@ http {
             add_header X-Cache-Status $upstream_cache_status always;
             # CORS is answered here, not by the bucket: the upstream's Access-Control-* headers are
             # dropped so one cached copy serves every embedding origin, and `*` is safe because
-            # nothing here is authorised by the origin — the token is, on every request.
+            # no credentials are involved and a refused origin never gets here ($origin_refused).
             proxy_hide_header Access-Control-Allow-Origin;
             proxy_hide_header Access-Control-Allow-Methods;
             proxy_hide_header Access-Control-Allow-Headers;
@@ -252,7 +290,7 @@ http {
             add_header Content-Disposition "attachment" always;
             # CORS is answered here, not by the bucket: the upstream's Access-Control-* headers are
             # dropped so one cached copy serves every embedding origin, and `*` is safe because
-            # nothing here is authorised by the origin — the token is, on every request.
+            # no credentials are involved and a refused origin never gets here ($origin_refused).
             proxy_hide_header Access-Control-Allow-Origin;
             proxy_hide_header Access-Control-Allow-Methods;
             proxy_hide_header Access-Control-Allow-Headers;
@@ -339,7 +377,7 @@ http {
             add_header X-Cache-Status $upstream_cache_status always;
             # CORS is answered here, not by the bucket: the upstream's Access-Control-* headers are
             # dropped so one cached copy serves every embedding origin, and `*` is safe because
-            # nothing here is authorised by the origin — the token is, on every request.
+            # no credentials are involved and a refused origin never gets here ($origin_refused).
             proxy_hide_header Access-Control-Allow-Origin;
             proxy_hide_header Access-Control-Allow-Methods;
             proxy_hide_header Access-Control-Allow-Headers;
