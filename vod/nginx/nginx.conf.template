@@ -121,6 +121,14 @@ http {
         include /usr/local/nginx/conf/allowed-origins.conf;
     }
 
+    # How long a browser or a CDN in front may keep an asset. Only a real answer: a 404 for a thumbnail
+    # still being generated, a 429 or a 502 kept for a week would be a broken image for that long,
+    # long after the cause is gone.
+    map $status $asset_cache_control {
+        "~^(200|206|304)$"  "public, max-age=604800";
+        default             "no-store";
+    }
+
     # How fast one address can make this edge fetch unsigned assets from S3. Assets need no token, so
     # a made-up ULID in the path was an S3 request anyone could send for free. Applied on the hop to
     # S3, where only a cache miss arrives: at the front door it would also count the thumbnails of a
@@ -252,7 +260,7 @@ http {
             proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
             proxy_set_header X-Edge-Asset-Client $remote_addr;
             proxy_ignore_headers Cache-Control Expires Set-Cookie Vary;
-            add_header Cache-Control "public, max-age=604800" always;
+            add_header Cache-Control $asset_cache_control always;
             add_header X-Cache-Status $upstream_cache_status always;
             # CORS is answered here, not by the bucket: the upstream's Access-Control-* headers are
             # dropped so one cached copy serves every embedding origin, and `*` is safe because
