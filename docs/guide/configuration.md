@@ -143,7 +143,7 @@ returns that day. If you show these numbers publicly, MaxMind's licence asks for
 
 Nodes are configured from the panel, not from a file on the node. There are two layers, both plain text of `KEY=VALUE` lines (blank lines and lines starting with `#` are ignored):
 
-- **The node environment** — one for every node, workers and proxies alike; a variable a node type does not read is simply ignored there. Managed from the panel or through `GET` / `PATCH /api/node-environment` (admin only), whose body is `{"environment": "KEY=VALUE\n..."}`. The same endpoint holds the [chunk store](/guide/nodes#chunk-store) address.
+- **The node environment** — one for every node, workers and proxies alike; a worker receives all of it, and a proxy only the variables it reads (see [Proxy Nodes](#proxy-nodes)). Managed from the panel or through `GET` / `PATCH /api/node-environment` (admin only), whose body is `{"environment": "KEY=VALUE\n..."}`. The same endpoint holds the [chunk store](/guide/nodes#chunk-store) address.
 - **A node's own `env`** — per-node overrides, edited on the node (the `env` field of `PATCH /api/nodes/{node}`). A key set here wins over the node environment.
 
 Both are layered over what the deploy sets itself: the values copied from the API host (see the tables above), `APP_ENV`, `APP_DEBUG`, `NODE_ACCEL`, `VIDEO_WORKER_TIMEOUT`, `REDIS_QUEUE_RETRY_AFTER`, `DOMAIN`, `VOD_BASE_URL`, `CHUNKS_S3_ENDPOINT` (workers only, from the [chunk store](/guide/nodes#chunk-store) address) and the CDN token settings. An override replaces any of those — a node that reaches Redis at another address sets its own `REDIS_HOST`, for instance — except the deploy-owned keys, which make a node part of *this* installation or must match across the fleet, and are dropped from both layers (with a warning in the log):
@@ -154,7 +154,9 @@ Everything here is applied when the container is created, so a change takes effe
 
 ### Proxy Nodes
 
-Proxy containers receive the [S3 Storage](#s3-storage) variables (to read packaged CMAF from the bucket) plus the token settings from [Proxy Node Delivery](#proxy-node-delivery), which are sourced from the CDN Settings panel.
+Proxy containers receive only what they read: `NODE_ID`, the [S3 Storage](#s3-storage) credentials, bucket, region and endpoint (to read packaged CMAF from the bucket), the token settings from [Proxy Node Delivery](#proxy-node-delivery), which are sourced from the CDN Settings panel, and the tuning below. Any other variable stays out of them, wherever it is set, including database and Redis credentials, `APP_KEY` and the webhook and internal secrets.
+
+They sign with the main S3 key unless **CDN Settings** holds a key for the proxies, which is the better setup: they only ever read, so give them a key limited to `s3:GetObject` on the bucket, and one leaked from a proxy cannot delete or rewrite anything. Workers keep the main key. The secret is never returned by the API. A change applies when the proxy nodes are redeployed, and a key that cannot read the bucket fails every cache miss with a `403`, so try it on one proxy first.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

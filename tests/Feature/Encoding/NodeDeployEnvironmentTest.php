@@ -3,6 +3,7 @@
 use App\Models\Node;
 use App\Services\NodeService;
 use App\Settings\CdnSettings;
+use App\Settings\EdgeS3Settings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -234,6 +235,156 @@ describe('vector placement', function () {
             // The node environment carries database, S3 and webhook credentials with it.
             ->and($matches[0])->not->toContain('APP_KEY=')
             ->and($matches[0])->not->toContain('AWS_SECRET_ACCESS_KEY=');
+    });
+});
+
+describe('what the edge container is given', function () {
+    // Set for real, since a host without them would pass the assertions below by having nothing to
+    // leak. `env()` reads these live, and `$_SERVER` ahead of `$_ENV`: the container running the
+    // suite has some of them set already, which is why both are replaced and put back.
+    beforeEach(function () {
+        fakeCdnProvider('self_hosted');
+        $this->hostEnv = [
+            'DB_PASSWORD' => 'db-secret',
+            'REDIS_PASSWORD' => 'redis-secret',
+            'WEBHOOK_SECRET' => 'webhook-secret',
+            'INTERNAL_API_SECRET' => 'internal-secret',
+            'SENTRY_LARAVEL_DSN' => 'https://sentry.example/1',
+            'AWS_ACCESS_KEY_ID' => 's3-key',
+            'AWS_SECRET_ACCESS_KEY' => 's3-secret',
+            'AWS_BUCKET' => 's3-bucket',
+            'AWS_ENDPOINT' => 'https://s3.example.com',
+            'AWS_DEFAULT_REGION' => 'us-east-1',
+        ];
+        $this->previousEnv = [$_SERVER, $_ENV];
+        foreach ($this->hostEnv as $key => $value) {
+            $_SERVER[$key] = $_ENV[$key] = $value;
+        }
+    });
+
+    afterEach(function () {
+        [$_SERVER, $_ENV] = $this->previousEnv;
+    });
+
+    $runArgs = function (Node $node): string {
+        preg_match('/^RUN_ARGS=.*$/m', app(NodeService::class)->buildDeployScript($node), $matches);
+
+        return $matches[0] ?? '';
+    };
+
+    it('leaves out every credential nginx has no use for', function () use ($runArgs) {
+        $args = $runArgs(deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com']));
+
+        expect($args)->not->toBe('');
+
+        foreach (['DB_PASSWORD=', 'REDIS_PASSWORD=', 'APP_KEY=', 'WEBHOOK_SECRET=', 'INTERNAL_API_SECRET=', 'SENTRY_LARAVEL_DSN='] as $variable) {
+            expect($args)->not->toContain($variable);
+        }
+    });
+
+    it('leaves out a credential set in the node environment too', function () use ($runArgs) {
+        expect($runArgs(deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'env' => 'SOME_API_TOKEN=abc'])))
+            ->not->toContain('SOME_API_TOKEN=');
+    });
+
+    it('keeps everything the entrypoint and the nginx template read', function () use ($runArgs) {
+        $args = $runArgs(deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com']));
+
+        foreach (['AWS_ACCESS_KEY_ID=s3-key', 'AWS_SECRET_ACCESS_KEY=s3-secret', 'AWS_BUCKET=s3-bucket', 'AWS_ENDPOINT=https://s3.example.com', 'AWS_DEFAULT_REGION=us-east-1', 'VOD_TOKEN_SECRET=', 'VOD_TOKEN_NAME=', 'NODE_ID='] as $variable) {
+            expect($args)->toContain($variable);
+        }
+    });
+
+    it('keeps the tuning a node sets for itself', function () use ($runArgs) {
+        $args = $runArgs(deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'env' => "VOD_S3_TLS_VERIFY=off\nVOD_CACHE_INACTIVE=7d"]));
+
+        expect($args)->toContain('VOD_S3_TLS_VERIFY=off')
+            ->and($args)->toContain('VOD_CACHE_INACTIVE=7d');
+    });
+
+    it('leaves out what merely looks like the edge\'s', function () use ($runArgs) {
+        $args = $runArgs(deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'env' => "AWS_OTHER_SECRET=abc\nVOD_SOMETHING=abc"]));
+
+        foreach (['AWS_OTHER_SECRET=', 'VOD_SOMETHING=', 'VOD_BASE_URL=', 'AWS_USE_PATH_STYLE_ENDPOINT='] as $variable) {
+            expect($args)->not->toContain($variable);
+        }
+    });
+
+    it('hands the edge every variable its entrypoint and nginx template read', function () use ($runArgs) {
+        // The other side of naming them one by one: a variable added to the edge and forgotten in
+        // the list would reach nginx empty, on the next deploy, with nothing else to say why.
+        // A list configured, because that variable is deploy-owned and absent without one.
+        CdnSettings::fake([
+            'provider' => 'self_hosted',
+            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com']]],
+        ]);
+
+        $sources = file_get_contents(base_path('vod/entrypoint.sh')).file_get_contents(base_path('vod/nginx/nginx.conf.template'));
+        preg_match_all('/\$\{?((?:AWS|VOD)_[A-Z0-9_]+)/', $sources, $named);
+
+        $read = array_diff(array_unique($named[1]), [
+            // Worked out by the entrypoint from AWS_ENDPOINT.
+            'AWS_ENDPOINT_SCHEME', 'AWS_ENDPOINT_HOST', 'AWS_ENDPOINT_SERVER', 'AWS_ENDPOINT_RESOLVE',
+            // Set by proxy.sh, which alone knows what this host's disks turned out to be.
+            'VOD_CACHE_EXPECT_POOL',
+        ]);
+
+        $args = $runArgs(deployableNode([
+            'type' => 'proxy',
+            'hostname' => 'edge.example.com',
+            'env' => implode("\n", array_map(fn (string $variable) => "{$variable}=1", $read)),
+        ]));
+
+        expect($read)->not->toBeEmpty();
+
+        foreach ($read as $variable) {
+            expect($args)->toContain("{$variable}=");
+        }
+    });
+
+    it('signs with the read-only key when one is set, and the main key otherwise', function () use ($runArgs) {
+        $node = deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com']);
+
+        expect($runArgs($node))->toContain('AWS_ACCESS_KEY_ID=s3-key')->toContain('AWS_SECRET_ACCESS_KEY=s3-secret');
+
+        EdgeS3Settings::fake(['access_key_id' => 'edge-key', 'secret_access_key' => 'edge-secret']);
+        $args = $runArgs($node);
+
+        expect($args)->toContain('AWS_ACCESS_KEY_ID=edge-key')
+            ->toContain('AWS_SECRET_ACCESS_KEY=edge-secret')
+            ->not->toContain('s3-secret')
+            ->not->toContain('AWS_ACCESS_KEY_ID=s3-key');
+    });
+
+    it('does not sign with half a pair', function () use ($runArgs) {
+        // The panel refuses this. If the row got there anyway, the main key still works.
+        EdgeS3Settings::fake(['access_key_id' => 'edge-key', 'secret_access_key' => '']);
+
+        expect($runArgs(deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])))
+            ->toContain('AWS_ACCESS_KEY_ID=s3-key')
+            ->toContain('AWS_SECRET_ACCESS_KEY=s3-secret');
+    });
+
+    it('never gives the read-only key to a worker, which has to write', function () {
+        EdgeS3Settings::fake(['access_key_id' => 'edge-key', 'secret_access_key' => 'edge-secret']);
+
+        expect(app(NodeService::class)->getEnvironmentVariables(deployableNode(['type' => 'worker'])))
+            ->toContain('AWS_ACCESS_KEY_ID=s3-key')
+            ->toContain('AWS_SECRET_ACCESS_KEY=s3-secret')
+            ->not->toContain('AWS_ACCESS_KEY_ID=edge-key');
+    });
+
+    it('leaves vector and workers with what they need', function () {
+        $service = app(NodeService::class);
+        $proxy = $service->buildDeployScript(deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com']));
+        preg_match('/^VECTOR_RUN_ARGS=.*$/m', $proxy, $vector);
+
+        expect($vector[0])->toContain('INTERNAL_API_SECRET=internal-secret');
+
+        // A worker runs the application against the database, so it keeps the whole environment.
+        expect($service->getEnvironmentVariables(deployableNode(['type' => 'worker'])))
+            ->toContain('DB_PASSWORD=db-secret')
+            ->toContain('AWS_SECRET_ACCESS_KEY=s3-secret');
     });
 });
 

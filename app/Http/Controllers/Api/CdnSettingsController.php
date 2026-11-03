@@ -6,6 +6,7 @@ use App\Data\CdnSettingsData;
 use App\Enums\CdnDriver;
 use App\Http\Controllers\Controller;
 use App\Settings\CdnSettings;
+use App\Settings\EdgeS3Settings;
 use App\Support\AllowedDomains;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,7 +19,7 @@ class CdnSettingsController extends Controller
         return response()->json(['data' => CdnSettingsData::fromSettings($settings)]);
     }
 
-    public function update(Request $request, CdnSettings $settings): JsonResponse
+    public function update(Request $request, CdnSettings $settings, EdgeS3Settings $edgeS3): JsonResponse
     {
         // Only the active provider's config is required; the other is left as-is so switching
         // providers never forces you to fill a config you aren't using.
@@ -42,6 +43,27 @@ class CdnSettingsController extends Controller
             'bunny.tokenWindow' => [Rule::requiredIf($bunnyActive), 'integer', 'min:1'],
             'bunny.apiKey' => ['nullable', 'string'],
             'bunny.pullZoneId' => ['nullable', 'string'],
+
+            // Validated as a pair: half of one signs every S3 request wrongly, and every cache miss
+            // on the proxies would be a 403. An unchanged key may leave the secret out, since the
+            // panel is never handed it back; a changed one cannot keep the old key's secret.
+            'edgeS3' => ['sometimes', 'array'],
+            'edgeS3.accessKeyId' => [
+                Rule::requiredIf(fn () => $request->filled('edgeS3.secretAccessKey')),
+                'nullable',
+                'string',
+                'max:255',
+                'regex:/^\S+$/D',
+            ],
+            'edgeS3.secretAccessKey' => [
+                Rule::requiredIf(fn () => $request->filled('edgeS3.accessKeyId') && (
+                    $request->input('edgeS3.accessKeyId') !== $edgeS3->access_key_id || $edgeS3->secret_access_key === ''
+                )),
+                'nullable',
+                'string',
+                'max:255',
+                'regex:/^\S+$/D',
+            ],
         ], [
             'selfHosted.allowedDomains.*.regex' => 'Each domain must be a bare hostname, like example.com or *.example.com. ":input" is not.',
         ]);
@@ -68,6 +90,14 @@ class CdnSettingsController extends Controller
                 'api_key' => $validated['bunny']['apiKey'] ?? null,
                 'pull_zone_id' => $validated['bunny']['pullZoneId'] ?? null,
             ], fn ($v) => $v !== null));
+        }
+
+        if (array_key_exists('edgeS3', $validated)) {
+            $edgeS3->access_key_id = $validated['edgeS3']['accessKeyId'] ?? '';
+            $edgeS3->secret_access_key = $edgeS3->access_key_id === ''
+                ? ''
+                : ($validated['edgeS3']['secretAccessKey'] ?? $edgeS3->secret_access_key);
+            $edgeS3->save();
         }
 
         $settings->provider = $validated['provider'];

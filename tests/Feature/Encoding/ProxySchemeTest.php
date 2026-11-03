@@ -43,7 +43,7 @@ it('serves the edge over TLS when APP_URL is https, even in development', functi
         // `websecure` to `le`, a host's own reverse proxy to whatever it is configured with.
         ->and($script)->not->toContain("traefik.http.routers.{$router}.tls.certresolver")
         ->and($script)->toContain('--entrypoints.websecure.http.tls.certresolver=le')
-        ->and($script)->toContain('VOD_BASE_URL=https://nv-cdn.delirio.org');
+        ->and(app(NodeService::class)->getEnvironmentVariables($this->node))->toContain('VOD_BASE_URL=https://nv-cdn.delirio.org');
 });
 
 it('serves the edge over plain HTTP when a development APP_URL is http', function () {
@@ -55,7 +55,7 @@ it('serves the edge over plain HTTP when a development APP_URL is http', functio
     expect(Node::proxyScheme())->toBe('http://')
         ->and($script)->toContain("traefik.http.routers.{$router}.entrypoints=web")
         ->and($script)->not->toContain("traefik.http.routers.{$router}.tls")
-        ->and($script)->toContain('VOD_BASE_URL=http://nv-cdn.delirio.org');
+        ->and(app(NodeService::class)->getEnvironmentVariables($this->node))->toContain('VOD_BASE_URL=http://nv-cdn.delirio.org');
 });
 
 it('keeps production on HTTPS whatever APP_URL says', function () {
@@ -68,7 +68,7 @@ it('keeps production on HTTPS whatever APP_URL says', function () {
 
     expect(Node::proxyScheme())->toBe('https://')
         ->and($script)->toContain("traefik.http.routers.{$router}.entrypoints=websecure")
-        ->and($script)->toContain('VOD_BASE_URL=https://nv-cdn.delirio.org');
+        ->and(app(NodeService::class)->getEnvironmentVariables($this->node))->toContain('VOD_BASE_URL=https://nv-cdn.delirio.org');
 });
 
 it('falls back to https when APP_URL states no scheme', function () {

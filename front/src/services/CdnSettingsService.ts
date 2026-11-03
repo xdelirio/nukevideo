@@ -5,6 +5,8 @@ export type CdnSettingsUpdate = {
   provider: App.Enums.CdnDriver
   selfHosted?: App.Data.SelfHostedConfigData
   bunny?: App.Data.BunnyConfigData
+  // Write-only secret: empty keeps the stored one. An empty key clears the pair.
+  edgeS3?: { accessKeyId: string; secretAccessKey?: string }
 }
 
 class CdnSettingsService {
