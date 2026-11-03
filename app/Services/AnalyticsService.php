@@ -606,7 +606,9 @@ class AnalyticsService
      * edge from before they were cached), `OFF` (downloads) and '' (an edge from before the
      * field) are left out rather than counted as misses, or a node serving many downloads would
      * look like it had no cache at all. `REVALIDATED` counts as a hit: the bytes came off the
-     * pool, and S3 only answered a 304 — which is every manifest each 30 seconds. Origin
+     * pool, and S3 only answered a 304. So do `STALE` and `UPDATING`, for the same reason: the edge
+     * answers from the pool during an S3 outage, and while another viewer refreshes an expired
+     * manifest, and neither is the cache failing. Origin
      * bytes live under account 0 and their own metric ({@see IngestBandwidthJob}), so
      * the grouping is on the node alone. Node 0 — rows that predate the dimension — is dropped.
      *
@@ -622,7 +624,7 @@ class AnalyticsService
             ->select('node_id')
             ->selectRaw("sum(case when metric in ({$in}) then value else 0 end) as delivered_bytes", $delivery)
             ->selectRaw('sum(case when metric = ? then value else 0 end) as origin_bytes', [IngestBandwidthJob::ORIGIN_METRIC])
-            ->selectRaw("sum(case when metric in ({$in}) and cache in ('HIT', 'REVALIDATED') then value else 0 end) as hit_bytes", $delivery)
+            ->selectRaw("sum(case when metric in ({$in}) and cache in ('HIT', 'REVALIDATED', 'STALE', 'UPDATING') then value else 0 end) as hit_bytes", $delivery)
             ->selectRaw("sum(case when metric in ({$in}) and cache not in ('', 'BYPASS', 'OFF') then value else 0 end) as cached_bytes", $delivery)
             ->groupBy('node_id')
             ->orderBy('node_id')

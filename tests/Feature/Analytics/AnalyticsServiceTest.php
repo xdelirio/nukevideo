@@ -146,6 +146,14 @@ it('counts a revalidated lookup as a hit: the bytes came off the pool, S3 only a
         ->toBe(round((1105 + 45) / (1155 + 45), 4));
 });
 
+it('counts a stale answer as a hit: the bytes came off the pool while S3 was being asked or was down', function (string $status) {
+    // What the edge answers with during an S3 outage, or while another viewer refreshes a manifest.
+    UsageService::add([delivered(['date' => '2026-04-12', 'cache' => $status, 'value' => 45])]);
+
+    expect($this->service->edgeDelivery('2026-04-01', '2026-04-30')[0]['hit_ratio'])
+        ->toBe(round((1105 + 45) / (1155 + 45), 4));
+})->with(['STALE', 'UPDATING']);
+
 it('keeps encoding seconds and upload volume out of the bytes, and reads them on their own', function () {
     expect($this->service->encodingUsage('2026-04-01', '2026-04-30'))->toBe(['cpu' => 12.5])
         ->and($this->service->encodingUsageOverTime('2026-04-01', '2026-04-30'))->toEqual([

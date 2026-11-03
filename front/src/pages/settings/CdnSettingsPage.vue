@@ -26,6 +26,9 @@ const errors = ref<Record<string, string[]>>({})
 // Text, not the form's array: splitting on every keystroke would swallow the newline being typed.
 const allowedDomains = ref('')
 
+// Never handed back by the API, so the field only ever holds a new secret being typed.
+const edgeS3Secret = ref('')
+
 // The API reports a bad entry by its position, and the textarea has one field to show it under.
 const allowedDomainsError = computed(() => {
   const key = Object.keys(errors.value).find((k) => k.startsWith('selfHosted.allowedDomains'))
@@ -35,6 +38,7 @@ const allowedDomainsError = computed(() => {
 function setForm(settings: App.Data.CdnSettingsData) {
   form.value = settings
   allowedDomains.value = settings.selfHosted.allowedDomains.join('\n')
+  edgeS3Secret.value = ''
 }
 
 async function fetchSettings() {
@@ -65,6 +69,10 @@ async function handleSave() {
                 .split('\n')
                 .map((domain) => domain.trim())
                 .filter(Boolean),
+            },
+            edgeS3: {
+              accessKeyId: form.value.edgeS3.accessKeyId.trim(),
+              secretAccessKey: edgeS3Secret.value.trim() || undefined,
             },
           }
         : { provider: form.value.provider, bunny: form.value.bunny }
@@ -128,6 +136,30 @@ onMounted(fetchSettings)
             <Label for="sh_token_secret">Token secret</Label>
             <Input id="sh_token_secret" v-model="form.selfHosted.tokenSecret" class="font-mono" />
             <p v-if="errors['selfHosted.tokenSecret']" class="text-sm text-destructive">{{ errors['selfHosted.tokenSecret'][0] }}</p>
+          </div>
+          <div class="grid gap-2">
+            <Label for="sh_s3_access_key">Proxies' S3 access key</Label>
+            <Input id="sh_s3_access_key" v-model="form.edgeS3.accessKeyId" class="font-mono" autocomplete="off" />
+            <p v-if="errors['edgeS3.accessKeyId']" class="text-sm text-destructive">{{ errors['edgeS3.accessKeyId'][0] }}</p>
+          </div>
+          <div class="grid gap-2">
+            <Label for="sh_s3_secret_key">Proxies' S3 secret key</Label>
+            <Input
+              id="sh_s3_secret_key"
+              v-model="edgeS3Secret"
+              type="password"
+              class="font-mono"
+              autocomplete="new-password"
+              :placeholder="form.edgeS3.secretConfigured ? 'Stored. Leave empty to keep it.' : ''"
+            />
+            <p class="text-sm text-muted-foreground">
+              Optional, and recommended: a key that can only read this bucket, so one leaked from a
+              proxy cannot delete anything. Leave both empty to use the main key, and empty the
+              access key to go back to it. Workers keep the main key. Applies once the proxy nodes
+              are redeployed, and a key that cannot read the bucket fails every cache miss, so try
+              it on one proxy first.
+            </p>
+            <p v-if="errors['edgeS3.secretAccessKey']" class="text-sm text-destructive">{{ errors['edgeS3.secretAccessKey'][0] }}</p>
           </div>
           <div class="grid gap-2">
             <Label for="sh_token_name">Token query name</Label>

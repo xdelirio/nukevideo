@@ -8,6 +8,7 @@
 use App\Http\Controllers\Api\CdnSettingsController;
 use App\Models\User;
 use App\Settings\CdnSettings;
+use App\Settings\EdgeS3Settings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 
@@ -37,6 +38,84 @@ it('keeps the binding when a save does not mention it', function () use ($selfHo
 
     // An older panel, or a script, saving the other fields must not switch it off behind the operator.
     $this->patchJson('/api/cdn-settings', $selfHosted())->assertOk()->assertJsonPath('data.selfHosted.bindIp', true);
+});
+
+describe('the read-only S3 key for the proxies', function () use ($selfHosted) {
+    $withKey = fn (array $edgeS3) => [...$selfHosted(), 'edgeS3' => $edgeS3];
+
+    it('starts empty', function () {
+        $this->getJson('/api/cdn-settings')
+            ->assertJsonPath('data.edgeS3.accessKeyId', '')
+            ->assertJsonPath('data.edgeS3.secretConfigured', false);
+    });
+
+    it('stores the pair and never hands the secret back', function () use ($withKey) {
+        $response = $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge-secret']))
+            ->assertOk()
+            ->assertJsonPath('data.edgeS3.accessKeyId', 'edge-key')
+            ->assertJsonPath('data.edgeS3.secretConfigured', true);
+
+        expect($response->getContent())->not->toContain('edge-secret')
+            ->and($this->getJson('/api/cdn-settings')->getContent())->not->toContain('edge-secret')
+            ->and(app(EdgeS3Settings::class)->secret_access_key)->toBe('edge-secret');
+    });
+
+    it('keeps the secret when a save leaves it out or empty', function (array $edgeS3) use ($withKey) {
+        $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge-secret']))->assertOk();
+
+        $this->patchJson('/api/cdn-settings', $withKey($edgeS3))->assertOk()->assertJsonPath('data.edgeS3.secretConfigured', true);
+
+        expect(app(EdgeS3Settings::class)->secret_access_key)->toBe('edge-secret');
+    })->with([
+        'left out' => [['accessKeyId' => 'edge-key']],
+        'empty' => [['accessKeyId' => 'edge-key', 'secretAccessKey' => '']],
+    ]);
+
+    it('leaves the pair alone when a save does not mention it', function () use ($withKey, $selfHosted) {
+        $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge-secret']))->assertOk();
+
+        $this->patchJson('/api/cdn-settings', $selfHosted())->assertOk()->assertJsonPath('data.edgeS3.accessKeyId', 'edge-key');
+    });
+
+    it('clears the pair when the key is emptied', function () use ($withKey) {
+        $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge-secret']))->assertOk();
+
+        $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => '']))
+            ->assertOk()
+            ->assertJsonPath('data.edgeS3.accessKeyId', '')
+            ->assertJsonPath('data.edgeS3.secretConfigured', false);
+
+        expect(app(EdgeS3Settings::class)->secret_access_key)->toBe('');
+    });
+
+    // A half-set pair signs every S3 request wrongly, and every cache miss on the edge is a 403.
+    it('refuses a new key without its secret', function () use ($withKey) {
+        $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => 'edge-key']))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('edgeS3.secretAccessKey');
+    });
+
+    it('refuses a changed key that would keep the old secret', function () use ($withKey) {
+        $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge-secret']))->assertOk();
+
+        $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => 'other-key']))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('edgeS3.secretAccessKey');
+
+        expect(app(EdgeS3Settings::class)->access_key_id)->toBe('edge-key');
+    });
+
+    it('refuses a secret without a key', function () use ($withKey) {
+        $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => '', 'secretAccessKey' => 'edge-secret']))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('edgeS3.accessKeyId');
+    });
+
+    it('refuses whitespace, which could not be a key and would corrupt the deploy', function (string $field) use ($withKey) {
+        $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge-secret', $field => "bad value\nLINE=1"]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors("edgeS3.{$field}");
+    })->with(['accessKeyId', 'secretAccessKey']);
 });
 
 it('refuses a value that is not a boolean', function () use ($selfHosted) {

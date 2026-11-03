@@ -132,7 +132,7 @@ USER www-data
 
 FROM alpine:3.20 AS proxy-builder
 
-ENV NGINX_VERSION=1.27.4
+ENV NGINX_VERSION=1.30.6
 ENV NGINX_AWS_AUTH_VERSION=1.1
 # A commit, not the 1.1 tag: 1.1 (2017) parses no `ip` field, and the check that refuses a token
 # from any other address than the one it names only exists on master (kaltura PR #22, 2021), which

@@ -48,6 +48,7 @@ export type CdnSettingsData = {
 provider: App.Enums.CdnDriver,
 selfHosted: App.Data.SelfHostedConfigData,
 bunny: App.Data.BunnyConfigData,
+edgeS3: App.Data.EdgeS3Data,
 };
 export type DownloadLinkData = {
 url: string,
@@ -55,6 +56,10 @@ expiresAt: string,
 filename: string,
 type: string,
 size: number | null,
+};
+export type EdgeS3Data = {
+accessKeyId: string,
+secretConfigured: boolean,
 };
 export type NodeData = {
 id: number,

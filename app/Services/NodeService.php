@@ -11,6 +11,7 @@ use App\Enums\NodeAccel;
 use App\Enums\NodeType;
 use App\Models\Node;
 use App\Settings\CdnSettings;
+use App\Settings\EdgeS3Settings;
 use App\Settings\NodeSettings;
 use App\Support\AllowedDomains;
 use App\Support\Cpu;
@@ -24,6 +25,7 @@ class NodeService
         private NodeSettings $nodeSettings,
         private CdnSettings $cdnSettings,
         private CloudflareDns $cloudflare,
+        private EdgeS3Settings $edgeS3,
     ) {}
 
     public function index(): array
@@ -207,6 +209,56 @@ class NodeService
         'VIDEO_WORKER_TIMEOUT',
         'REDIS_QUEUE_RETRY_AFTER',
     ];
+
+    /**
+     * What the edge's container is given: exactly what its entrypoint and nginx template read. Not
+     * the whole node environment, which carries the database password and APP_KEY, because this is
+     * the one container that answers the internet directly and a process with a foothold in it
+     * could read them. Named one by one rather than by prefix, so nothing reaches it that nobody
+     * decided should: adding a variable to the edge means adding it here, and a test fails until
+     * it is.
+     */
+    private const EDGE_ENV = [
+        'NODE_ID',
+        'AWS_ACCESS_KEY_ID',
+        'AWS_SECRET_ACCESS_KEY',
+        'AWS_DEFAULT_REGION',
+        'AWS_BUCKET',
+        'AWS_ENDPOINT',
+        'VOD_TOKEN_SECRET',
+        'VOD_TOKEN_NAME',
+        'VOD_ALLOWED_DOMAINS',
+        'VOD_S3_TLS_VERIFY',
+        'VOD_CACHE_MAX_SIZE',
+        'VOD_CACHE_MIN_FREE',
+        'VOD_CACHE_KEYS_ZONE',
+        'VOD_CACHE_INACTIVE',
+    ];
+
+    /** @return list<string> */
+    private function edgeEnvironment(Node $node): array
+    {
+        $env = array_values(array_filter(
+            $this->getEnvironmentVariables($node),
+            fn (string $line) => in_array(explode('=', $line, 2)[0], self::EDGE_ENV, true),
+        ));
+
+        // Both or neither: half a pair signs every S3 request wrongly, and every cache miss on the
+        // edge would be a 403. The panel refuses it, and this keeps a row that got here anyway
+        // from taking delivery down.
+        if ($this->edgeS3->access_key_id === '' || $this->edgeS3->secret_access_key === '') {
+            return $env;
+        }
+
+        return [
+            ...array_values(array_filter(
+                $env,
+                fn (string $line) => ! in_array(explode('=', $line, 2)[0], ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'], true),
+            )),
+            "AWS_ACCESS_KEY_ID={$this->edgeS3->access_key_id}",
+            "AWS_SECRET_ACCESS_KEY={$this->edgeS3->secret_access_key}",
+        ];
+    }
 
     /**
      * Reads the same merged chain the environment does, node overriding settings. It used to look
@@ -544,7 +596,7 @@ class NodeService
         }
 
         $runArgs = $this->buildDockerRunArgs($node->serviceContainerName(), $this->resolveImage('proxy'), [
-            'env' => $this->getEnvironmentVariables($node),
+            'env' => $this->edgeEnvironment($node),
             'labels' => $labels,
             'network' => 'nukevideo_default',
             // Resolved on the node by proxy.sh: CACHE_MOUNT is the pool's directory, or the
