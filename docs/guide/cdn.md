@@ -11,7 +11,7 @@ Both modes gate access with time-limited tokens and read the packaged output fro
 Proxy nodes are servers you run and manage from the admin panel (over SSH — see [Nodes](/guide/nodes)). Each runs a custom nginx build that:
 
 - Validates Akamai-style stream tokens (HMAC) on incoming requests.
-- Reads the pre-packaged CMAF segments from S3 using AWS authentication.
+- Reads the pre-packaged CMAF segments from S3 using AWS authentication. It only ever reads: any method but `GET`, `HEAD` and `OPTIONS` gets a `405`.
 - Caches segments on the node's own disk pool so repeat requests don't hit S3 every time; **manifests are cached for 30 seconds** (each viewer still gets their own token written into them), and **downloads never enter it** (they are whole files, fetched once, and must keep supporting `Range` resumes). See [Cache disks](/guide/nodes#cache-disks).
 - Embeds the token a manifest was requested with into the segment URLs it rewrites, rather than minting one per manifest, so every request of a playback session carries the same token — the one the API recorded a caller's tracking id against. The token is logged and hashed on the node; nothing downstream sees it. See [Requesting a Playback URL](/guide/streaming#requesting-a-playback-url).
 - Logs, per request, what its cache did and what it fetched from the origin; the nodes page turns that into a hit ratio per node. Origin bytes are recorded under the `origin_bytes` metric and account `0` — the operator's cost, never a customer's usage.

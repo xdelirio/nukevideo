@@ -180,6 +180,13 @@ http {
         #access_log /dev/stdout main;
         access_log /dev/stdout bandwidth;
 
+        # Delivery only reads. The hop below signs whatever it forwards with the bucket's
+        # credentials, method included, so any other method would reach S3 as an authorised request.
+        # At server level so that no location, present or future, can leave it out.
+        if ($request_method !~ ^(GET|HEAD|OPTIONS)$) {
+            return 405;
+        }
+
         # At server level so no location can forget it, preflights included: a refused page gets a
         # 403 with no CORS headers, which its player reports as a network error. The liveness probe
         # carries no Origin and passes.
