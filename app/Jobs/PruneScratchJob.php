@@ -187,6 +187,12 @@ class PruneScratchJob implements ShouldQueue
      * Abort multipart uploads abandoned mid-flight (browser closed, client crashed): their parts
      * are invisible to `files()` yet billed forever, and nothing else reclaims them. Best-effort —
      * not every S3-compatible store supports the listing, so failures only log.
+     *
+     * Age runs from `Initiated`, which says nothing about whether the client is still at it: an
+     * upload paused overnight, or a client waiting hours on its own source between parts, is
+     * alive past a day. So the cutoff is the window its metadata lives
+     * ({@see UppyS3Service::META_TTL_DAYS}) — past it no part can be signed or completed, so the
+     * upload is dead whatever its client thinks — rather than the 24 h used to kill such uploads.
      */
     private function pruneStaleMultipartUploads(): void
     {
@@ -201,7 +207,7 @@ class PruneScratchJob implements ShouldQueue
                 $initiated = $upload['Initiated'] ?? null;
 
                 if (! $initiated instanceof \DateTimeInterface
-                    || $initiated->getTimestamp() > now()->subSeconds(self::UPLOAD_GRACE_SECONDS)->getTimestamp()) {
+                    || $initiated->getTimestamp() > now()->subDays(UppyS3Service::META_TTL_DAYS)->getTimestamp()) {
                     continue;
                 }
 

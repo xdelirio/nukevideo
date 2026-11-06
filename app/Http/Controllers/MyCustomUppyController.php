@@ -7,10 +7,12 @@ use App\DTOs\TrackUploadMeta;
 use App\DTOs\UploadMeta;
 use App\Enums\VideoPriority;
 use App\Jobs\OnVideoUploaded;
+use App\Jobs\PruneScratchJob;
 use App\Models\Project;
 use App\Models\Video;
 use App\Services\TrackIngestService;
 use App\Services\UppyS3Service;
+use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -106,7 +108,7 @@ class MyCustomUppyController extends Controller
         $this->authorizeUploadKey($request);
 
         return response()->json(
-            $this->listParts($request->input('key'), $uploadId)
+            $this->onExistingUpload(fn () => $this->listParts($request->input('key'), $uploadId))
         );
     }
 
@@ -114,14 +116,14 @@ class MyCustomUppyController extends Controller
     {
         $this->authorizeUploadKey($request);
 
-        $result = $this->client->completeMultipartUpload([
+        $result = $this->onExistingUpload(fn () => $this->client->completeMultipartUpload([
             'Bucket' => $this->bucket,
             'Key' => $request->input('key'),
             'UploadId' => $uploadId,
             'MultipartUpload' => [
                 'Parts' => $request->input('parts'),
             ],
-        ]);
+        ]));
 
         return response()->json([
             'location' => $result['Location'],
@@ -132,11 +134,11 @@ class MyCustomUppyController extends Controller
     {
         $this->authorizeUploadKey($request);
 
-        $this->client->abortMultipartUpload([
+        $this->onExistingUpload(fn () => $this->client->abortMultipartUpload([
             'Bucket' => $this->bucket,
             'Key' => $request->input('key'),
             'UploadId' => $uploadId,
-        ]);
+        ]));
 
         return response()->json([]);
     }
@@ -160,6 +162,31 @@ class MyCustomUppyController extends Controller
         return response()->json([
             'url' => (string) $result->getUri(),
         ]);
+    }
+
+    /**
+     * Runs a call on a multipart upload the client is still holding. S3 answers `NoSuchUpload`
+     * once the upload is gone (completed, aborted, or swept by {@see PruneScratchJob}
+     * after a day without finishing), and that is the client's to recover from by starting a new
+     * one, not a fault of ours: a 404 says so, where the 500 it used to surface as was retried by
+     * resumable clients for days and logged a stack trace on every attempt.
+     *
+     * @template T
+     *
+     * @param  callable(): T  $call
+     * @return T
+     */
+    private function onExistingUpload(callable $call): mixed
+    {
+        try {
+            return $call();
+        } catch (S3Exception $exception) {
+            if ($exception->getAwsErrorCode() === 'NoSuchUpload') {
+                abort(404, 'This upload no longer exists: it was completed, aborted or expired. Start a new one.');
+            }
+
+            throw $exception;
+        }
     }
 
     /** S3 caps ListParts pages at 1000; follow the marker so huge files list completely. */
