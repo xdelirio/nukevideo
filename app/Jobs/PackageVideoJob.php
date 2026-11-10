@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Data\VideoData;
 use App\Enums\VideoStatus;
+use App\Exceptions\StoreTransferException;
 use App\Jobs\Concerns\CompletesVideo;
 use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Output;
@@ -14,17 +15,22 @@ use App\Services\ChunkTranscodeService;
 use App\Services\CreateVideoStreamsService;
 use App\Services\PackagerCommandBuilder;
 use App\Services\SubtitlePackager;
+use App\Support\PrimaryStore;
 use App\Support\Scratch;
 use App\Support\WebVtt;
+use FilesystemIterator;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use RuntimeException;
 use Throwable;
 
@@ -55,8 +61,9 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
     // Without it the unique lock never expired: a package job lost with a stopped worker kept it
     // forever, and the framework silently dropped every later dispatch for the video, its retry's
-    // included (video 9082 encoded every chunk and hung in UPLOADING). Covers every try.
-    public int $uniqueFor = 10800;
+    // included (video 9082 encoded every chunk and hung in UPLOADING). Covers every try, and the
+    // waits between them when the primary store is down ({@see waitForPrimaryStore}).
+    public int $uniqueFor = 14400;
 
     public function __construct(
         public int $videoId,
@@ -126,11 +133,44 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
                 ->whereNotIn('status', [VideoStatus::FAILED->value])
                 ->update(['status' => VideoStatus::COMPLETED->value]);
             $this->finalizeVideoIfReady($video);
+        } catch (StoreTransferException $e) {
+            if (! $this->waitForPrimaryStore($e)) {
+                throw $e;
+            }
         } finally {
             Storage::disk('local')->deleteDirectory($video->gatherDir());
             Storage::disk('local')->deleteDirectory($video->chunkstageDir());
             Storage::disk('local')->deleteDirectory($video->processedDir());
         }
+    }
+
+    /**
+     * Put the job back on the queue when the primary store is what failed, instead of counting an
+     * exception against a video whose every chunk is encoded: two of those used to fail it
+     * ($maxExceptions), and the retry re-encoded it from scratch once its scratch was pruned. The
+     * wait grows with each attempt and is bounded by $tries; the note left for the dispatcher keeps
+     * new videos from walking into the same outage. False when this is not that case.
+     */
+    private function waitForPrimaryStore(StoreTransferException $e): bool
+    {
+        if ($e->disk !== 's3' || ! $this->job || $this->attempts() >= $this->tries) {
+            return false;
+        }
+
+        PrimaryStore::markUnavailable($e->getMessage());
+
+        $delay = 300 * $this->attempts();
+
+        Log::warning('Primary store unavailable; packaging will run again', [
+            'video' => $this->videoId,
+            'attempt' => $this->attempts(),
+            'retry_in' => $delay,
+            'error' => mb_substr($e->getMessage(), 0, 500),
+        ]);
+
+        $this->release($delay);
+
+        return true;
     }
 
     /**
@@ -613,22 +653,63 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     private function syncToPrimary(Video $video, string $gatherDir, ?string $processedDir): void
     {
         $timeout = $this->timeout - 120;
+        $bytes = $this->treeBytes($gatherDir) + ($processedDir === null ? 0 : $this->treeBytes($processedDir));
+        $startedAt = microtime(true);
 
-        $this->s5cmdSyncTyped('s3', "{$gatherDir}/", $this->s3Uri('s3', "{$video->playPrefix()}/"), $video, $timeout);
+        // How many uploads share the home uplink right now: a slow sync next to three others is
+        // the link, alone it is the store. Best effort — a cache hiccup must never fail a package.
+        $concurrent = $this->countSync(+1);
 
-        // Its own pass to the download zone: these are full-quality masters, not something a
-        // playback token should reach ({@see relocateProcessedRenditions}).
-        if ($processedDir !== null) {
-            $this->s5cmdSync(
-                's3',
-                "{$processedDir}/",
-                $this->s3Uri('s3', "{$video->downloadPrefix()}/"),
-                $video,
-                $timeout,
-            );
+        try {
+            $this->s5cmdSyncTyped('s3', "{$gatherDir}/", $this->s3Uri('s3', "{$video->playPrefix()}/"), $video, $timeout);
+
+            // Its own pass to the download zone: these are full-quality masters, not something a
+            // playback token should reach ({@see relocateProcessedRenditions}).
+            if ($processedDir !== null) {
+                $this->s5cmdSync(
+                    's3',
+                    "{$processedDir}/",
+                    $this->s3Uri('s3', "{$video->downloadPrefix()}/"),
+                    $video,
+                    $timeout,
+                );
+            }
+        } finally {
+            $this->countSync(-1);
         }
 
-        Log::info('Processed files and packages synced to primary S3', ['video' => $video->id]);
+        Log::info('Package synced', [
+            'video' => $video->id,
+            'bytes' => $bytes,
+            's' => round(microtime(true) - $startedAt, 1),
+            'concurrent' => $concurrent,
+        ]);
+    }
+
+    /** Bytes under a local directory, for the sync log. */
+    private function treeBytes(string $dir): int
+    {
+        if (! is_dir($dir)) {
+            return 0;
+        }
+
+        $bytes = 0;
+
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)) as $file) {
+            $bytes += $file->getSize();
+        }
+
+        return $bytes;
+    }
+
+    /** Moves the fleet-wide count of running package syncs; null when the cache cannot say. */
+    private function countSync(int $by): ?int
+    {
+        try {
+            return $by > 0 ? (int) Cache::increment('package-syncs') : (int) Cache::decrement('package-syncs');
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     public function failed(Throwable $e): void

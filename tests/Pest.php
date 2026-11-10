@@ -5,6 +5,7 @@ use App\Models\Project;
 use App\Models\Stream;
 use App\Models\Template;
 use App\Models\Video;
+use Illuminate\Queue\Jobs\FakeJob;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -260,4 +261,28 @@ function fakeS5cmdSync(string|array $command): bool
     }
 
     return true;
+}
+
+/**
+ * A queue job for `$job->setJob()` that carries a payload, so code reading `retryUntil`,
+ * `createdAt` or the attempt count off the real queue job can be exercised without Redis. The
+ * framework's FakeJob answers an empty body, which reads as an old payload with none of them.
+ *
+ * @param  array<string, mixed>  $payload
+ */
+function fakeQueueJob(array $payload = [], int $attempts = 1): FakeJob
+{
+    $job = new class($payload) extends FakeJob
+    {
+        public function __construct(private array $body) {}
+
+        public function getRawBody()
+        {
+            return json_encode($this->body);
+        }
+    };
+
+    $job->attempts = $attempts;
+
+    return $job;
 }

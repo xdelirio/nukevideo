@@ -188,7 +188,7 @@ it('builds the full hwaccel command for a windowed chunk and leaves sidecars alo
 
     $cmd = EncodeCommandBuilder::build(collect([$video]), 'http://src', [1 => '/out.part'], 0.0, 10.0);
 
-    expect($cmd)->toContain('-hwaccel qsv -hwaccel_output_format qsv -ss 0.0000 -to 10.0000 -i "http://src"');
+    expect($cmd)->toContain('-hwaccel qsv -hwaccel_output_format qsv -ss 0.000000 -to 10.000000 -i "http://src"');
 
     $audio = (new Stream)->forceFill(['type' => 'audio', 'input_params' => ['audio_codec' => 'aac'], 'meta' => []]);
     $audio->id = 2;

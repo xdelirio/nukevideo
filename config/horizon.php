@@ -21,11 +21,39 @@ use App\Support\Gpu;
 $isWorker = env('NODE_TYPE') === 'worker';
 $runsPackaging = $isWorker && ! filter_var(env('DISABLE_PACKAGING', false), FILTER_VALIDATE_BOOL);
 
+// Pools are pinned (minProcesses = maxProcesses). `balance => none` does not mean a fixed pool:
+// Horizon still scales a lone pool between 1 and its maximum by the length of its ready queue, one
+// process every few seconds, and starts it at half. Between fan-outs the pools decayed and then
+// climbed back a process at a time — 30,000 graceful worker stops in nine days on one node, with
+// 21 of its 32 encoders busy on average. An idle PHP worker costs a few tens of MB; an idle core
+// costs the backlog.
 $videoWorker = [
     'connection' => 'redis',
     'queue' => ['video-processing'],
     'balance' => 'none',
+    'minProcesses' => Cpu::videoWorkerProcesses(),
     'maxProcesses' => Cpu::videoWorkerProcesses(),
+    // Horizon adds one process per cooldown; at the default a 40-process pool took two minutes
+    // to fill after every start.
+    'balanceMaxShift' => 8,
+    'maxTime' => 0,
+    'maxJobs' => 0,
+    'memory' => 1024,
+    'tries' => 2,
+    'timeout' => (int) env('VIDEO_WORKER_TIMEOUT', 600),
+    'nice' => 0,
+];
+
+// Renditions above 1080p ({@see \App\Models\Stream::isHeavyEncode}), on their own small pool: one
+// 2160p encode holds what four 1080p ones do, so sharing the common pool's slots let a node start
+// as many of them as it had slots and run out of memory. Heavy-only on purpose — the pool reserves
+// nothing while it idles, and each job waits for free memory before it starts ffmpeg.
+$heavyWorker = [
+    'connection' => 'redis',
+    'queue' => ['video-processing-heavy'],
+    'balance' => 'none',
+    'minProcesses' => Cpu::heavyWorkerProcesses(),
+    'maxProcesses' => Cpu::heavyWorkerProcesses(),
     'maxTime' => 0,
     'maxJobs' => 0,
     'memory' => 1024,
@@ -41,6 +69,7 @@ $orchestrationWorker = [
     'connection' => 'redis',
     'queue' => ['orchestration'],
     'balance' => 'none',
+    'minProcesses' => 3,
     'maxProcesses' => 3,
     'maxTime' => 0,
     'maxJobs' => 0,
@@ -56,6 +85,7 @@ $packagingWorker = [
     'connection' => 'redis',
     'queue' => ['packaging'],
     'balance' => 'none',
+    'minProcesses' => 2,
     'maxProcesses' => 2,
     'maxTime' => 0,
     'maxJobs' => 0,
@@ -123,10 +153,10 @@ $isGpu = $isWorker && in_array($accel, ['intel', 'nvidia'], true);
 // CPU transcode chunks.
 $workerDefaults = $isGpu
     ? ['gpu-worker' => $gpuWorker]
-    : ['video-worker' => $videoWorker];
+    : ['video-worker' => $videoWorker, 'heavy-worker' => $heavyWorker];
 $workerEnv = $isGpu
     ? ['gpu-worker' => []]
-    : ['video-worker' => []];
+    : ['video-worker' => [], 'heavy-worker' => []];
 
 $workerDefaults['orchestration-worker'] = $orchestrationWorker;
 $workerEnv['orchestration-worker'] = [];

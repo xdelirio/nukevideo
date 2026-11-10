@@ -7,10 +7,18 @@ use App\Enums\VideoPriority;
 use App\Enums\VideoStatus;
 use App\Jobs\PrepareVideoJob;
 use App\Models\Node;
+use App\Models\Stream;
 use App\Models\Template;
 use App\Models\Video;
+use App\Support\NodeSampler;
+use App\Support\PrepClaim;
+use App\Support\PrimaryStore;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Str;
+use Laravel\Horizon\Contracts\SupervisorRepository;
+use Throwable;
 
 class DispatchPendingVideosCommand extends Command
 {
@@ -31,6 +39,15 @@ class DispatchPendingVideosCommand extends Command
     public function handle(): void
     {
         if (Node::worker()->active()->doesntExist()) {
+            return;
+        }
+
+        $this->sampleQueues();
+
+        // A job just ran out of attempts against the primary store. Claiming more would only walk
+        // them into the same outage — and a video fails on its second such error — so the backlog
+        // waits where it is safe: PENDING. The note expires by itself.
+        if (PrimaryStore::unavailable()) {
             return;
         }
 
@@ -57,6 +74,45 @@ class DispatchPendingVideosCommand extends Command
                 $this->tryDispatch($video, $inFlight);
             }
         }
+    }
+
+    /**
+     * Queue lengths and Horizon's worker counts for this minute, next to the nodes' memory samples
+     * ({@see NodeSampler}): together they tell a starved node from one with nothing queued. Each
+     * read degrades to "unknown" on its own — a Redis flap must not cost the dispatch tick.
+     */
+    private function sampleQueues(): void
+    {
+        $queues = ['orchestration', 'packaging', Stream::HEAVY_QUEUE, ...array_map(
+            fn (string $family) => $family === Template::CPU ? 'video-processing' : "video-processing-{$family}",
+            $this->families(),
+        )];
+
+        $lengths = [];
+
+        foreach ($queues as $queue) {
+            try {
+                $lengths[$queue] = Queue::connection()->size($queue);
+            } catch (Throwable) {
+                // Unknown this minute.
+            }
+        }
+
+        $processes = [];
+
+        try {
+            foreach (app(SupervisorRepository::class)->all() as $supervisor) {
+                // Keyed "connection:queue" ("redis:video-processing").
+                foreach ((array) $supervisor->processes as $queue => $count) {
+                    $name = Str::after($queue, ':');
+                    $processes[$name] = ($processes[$name] ?? 0) + (int) $count;
+                }
+            }
+        } catch (Throwable) {
+            // Horizon's registry unreadable: the lengths still count.
+        }
+
+        NodeSampler::recordQueues($lengths, $processes);
     }
 
     /**
@@ -109,16 +165,24 @@ class DispatchPendingVideosCommand extends Command
         }
 
         // Revert on dispatch failure so the video isn't stranded in RUNNING with no job.
+        $token = null;
+
         try {
-            PrepareVideoJob::dispatch($video->id, $originalPath)
+            // The claim says a prep is owed to this video until the job settles it, which is what
+            // the reaper reads while the job waits in the queue and beats no heartbeat.
+            $token = PrepClaim::issue($video->id);
+
+            dispatch((new PrepareVideoJob($video->id, $originalPath))->withClaim($token))
                 ->onQueue(self::QUEUE);
 
             // Occupies a slot in every family it encodes on, for the rest of this tick.
             foreach ($capacities as $capacity) {
                 $inFlight[$capacity] = ($inFlight[$capacity] ?? 0) + 1;
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             Log::error('Failed to dispatch segment job; reverting to pending', ['video' => $video->id, 'error' => $e->getMessage()]);
+
+            PrepClaim::forget($video->id, $token);
 
             Video::whereKey($video->id)
                 ->where('status', VideoStatus::RUNNING->value)
@@ -164,24 +228,31 @@ class DispatchPendingVideosCommand extends Command
     /** @var array<string, int> Memoised per tick; the fleet cannot change mid-run. */
     private array $limits = [];
 
+    /** Videos a node keeps in flight: one feeding its encoders while the next one prepares. */
+    private const VIDEOS_PER_NODE = 2;
+
     /**
-     * How many videos this hardware family may have in flight: its active nodes, plus one.
+     * How many videos this hardware family may have in flight: two per active node, plus one.
      *
      * Derived rather than configured, because a fixed number drifts the moment the fleet changes —
      * and it drifts silently, leaving nodes idle or the queue starved until someone remembers to
      * edit it and redeploy.
      *
-     * One video per node is already generous: a node runs several encode processes and a single
-     * video fans out into tens of chunk jobs, so it saturates that node many times over. The extra
-     * one covers preparation — a video that is still downloading and probing its source has
-     * produced no chunks yet, so without it a one-node family sits idle through every prep.
+     * A slot is held from the claim until the video is settled, and most of that time the video
+     * feeds no encoder: it is downloading and probing (a median of eight minutes), or packaging
+     * and uploading (up to half an hour when the primary store is slow). At one per node plus one,
+     * the fleet's three slots were regularly all in those phases at once, and a 32-thread node had
+     * no chunk to encode 20-37% of the time with thousands of videos pending. Two per node keeps
+     * a video encoding on every node while another prepares behind it; the queue deepening is not
+     * a risk to their heartbeats any more, since the reaper leaves a video alone while its batch
+     * still has jobs waiting.
      *
      * A family with no nodes at all lands on 1, which never dispatches anything: `missingCapacity()`
      * below turns those away first, and says why.
      */
     private function limitFor(string $capacity): int
     {
-        return $this->limits[$capacity] ??= 1 + Node::worker()->active()
+        return $this->limits[$capacity] ??= 1 + self::VIDEOS_PER_NODE * Node::worker()->active()
             ->when(
                 $capacity === Template::CPU,
                 fn ($q) => $q->whereNull('accel'),

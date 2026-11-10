@@ -158,7 +158,7 @@ describe('command assembly', function () {
         $command = EncodeCommandBuilder::build(new Collection([$stream]), 'src.mkv', [1 => 'out.part'], 0.0, 10.0);
 
         expect($command)
-            ->toContain('-hwaccel qsv -hwaccel_output_format qsv -ss 0.0000 -to 10.0000 -i "src.mkv"')
+            ->toContain('-hwaccel qsv -hwaccel_output_format qsv -ss 0.000000 -to 10.000000 -i "src.mkv"')
             ->toContain('vpp_qsv');
     });
 

@@ -4,6 +4,8 @@ namespace App\Services;
 
 use App\Jobs\ProcessChunkJob;
 use App\Models\Stream;
+use App\Support\Cpu;
+use App\Support\OomScore;
 use Closure;
 use Illuminate\Process\Exceptions\ProcessTimedOutException;
 use Illuminate\Process\Pool;
@@ -58,9 +60,15 @@ class PerTitleCrfService
     private const MAX_EXTRA_ANCHORS = 2;
 
     /**
-     * Wall seconds a rendition's probe may have spent and still measure another anchor. Each one
-     * costs about what the last took, and PrepareVideoJob runs every rendition's probe and the
-     * preflight inside its fixed timeout; an extra anchor is a saving, never worth that job.
+     * Wall seconds a rendition's probe may have spent and still measure another anchor, when the
+     * caller does not say how long it really has. Each one costs about what the last took, and
+     * PrepareVideoJob runs every rendition's probe and the preflight inside its fixed timeout; an
+     * extra anchor is a saving, never worth that job.
+     *
+     * A fixed number made the CRF answer to how busy the node was: on a loaded node two 1080p
+     * anchors alone took 290-365 s, so the third never ran, the CRF stayed on the top anchor, and
+     * 21% of 1080p renditions shipped ~2 VMAF over their target at 1.4-1.5x the bytes. The job
+     * knows what is left of its own timeout and passes that instead ({@see apply}).
      */
     private const EXTRA_ANCHOR_BUDGET = 420;
 
@@ -84,16 +92,23 @@ class PerTitleCrfService
      */
     private const SATURATION_MARGIN = 3.0;
 
-    // The probe runs inside ONE worker slot, so it may not spend the whole node. Keep it to a
-    // couple of samples at a time; the chunk encoders own the rest of the CPU.
-    private const MAX_CONCURRENCY = 2;
+    private float $stepUpBudget = self::EXTRA_ANCHOR_BUDGET;
+
+    /** Why stepping up stopped short of an anchor it wanted: `time`, `failed`, or null. */
+    private ?string $stepUpCut = null;
 
     public function __construct(
         private Stream $stream,
     ) {}
 
-    public function apply(string $sourcePath, float $duration, ?Closure $tick = null): void
+    /**
+     * @param  ?float  $stepUpBudget  wall seconds this rendition's probe may take and still measure
+     *                                another anchor; null for the fixed default
+     */
+    public function apply(string $sourcePath, float $duration, ?Closure $tick = null, ?float $stepUpBudget = null): void
     {
+        $this->stepUpBudget = $stepUpBudget ?? self::EXTRA_ANCHOR_BUDGET;
+
         [$crfKey, $maxCrf] = $this->crfParameter();
 
         if (! $this->shouldProbe($crfKey, $duration)) {
@@ -164,6 +179,10 @@ class PerTitleCrfService
             'bitrate_target' => $aim,
             'estimated_bitrate' => $estimated === null ? null : (int) round($estimated),
             'windows' => count($windows),
+            // Set when the top anchor still cleared the target and the next one was never measured:
+            // the CRF sits on that anchor, above what the target needed. Nothing recorded this
+            // before, so the renditions it cost could only be found by replaying the decision.
+            'step_up_cut' => $this->stepUpCut,
         ];
 
         $this->stream->update(['input_params' => $params, 'meta' => $meta]);
@@ -216,10 +235,13 @@ class PerTitleCrfService
                 break;
             }
 
-            if ($spent + $perAnchor > self::EXTRA_ANCHOR_BUDGET) {
-                Log::info('Per-title stops stepping up: out of probe time', [
+            if ($spent + $perAnchor > $this->stepUpBudget) {
+                $this->stepUpCut = 'time';
+
+                Log::warning('Per-title stops stepping up: out of probe time', [
                     'stream' => $this->stream->id,
                     'spent' => (int) $spent,
+                    'budget' => (int) $this->stepUpBudget,
                     'top_anchor' => $top,
                 ]);
                 break;
@@ -230,7 +252,9 @@ class PerTitleCrfService
             try {
                 [$more, $moreRates] = $this->measureAnchors([$next], $crfKey, $windows, $sourcePath, $tick, withSourceRate: false);
             } catch (Throwable $e) {
-                Log::info('Per-title extra anchor failed; deciding on the anchors measured', [
+                $this->stepUpCut = 'failed';
+
+                Log::warning('Per-title extra anchor failed; deciding on the anchors measured', [
                     'stream' => $this->stream->id,
                     'anchor' => $next,
                     'error' => $e->getMessage(),
@@ -584,13 +608,15 @@ class PerTitleCrfService
         $outputs = [];
         $this->poolBatchSeconds = [];
 
-        foreach (array_chunk($commands, self::MAX_CONCURRENCY) as $batch) {
+        foreach (array_chunk($commands, Cpu::probeConcurrency()) as $batch) {
             $batchStartedAt = microtime(true);
 
             try {
                 $results = Process::pool(function (Pool $pool) use ($batch) {
                     foreach ($batch as $command) {
-                        $pool->timeout(SampleEncode::TIMEOUT)->command($command);
+                        // The kernel's pick over a worker or the chunk store when memory runs out. A
+                        // killed sample costs its window, like any failed one.
+                        $pool->timeout(SampleEncode::TIMEOUT)->command(OomScore::wrap($command, OomScore::probe()));
                     }
                 })->start(fn () => $tick())->wait();
 
@@ -623,7 +649,7 @@ class PerTitleCrfService
     }
 
     /**
-     * Mean batch wall time as a per-encode cost. The batches run {@see MAX_CONCURRENCY} encodes at
+     * Mean batch wall time as a per-encode cost. The batches run {@see Cpu::probeConcurrency} encodes at
      * once, so a batch takes as long as its slowest member rather than the sum — which makes this
      * the cost of one encode with company, the same shape a chunk job runs in.
      */
@@ -659,6 +685,16 @@ class PerTitleCrfService
         }
 
         if ($duration < SampleEncode::MIN_DURATION || ! $this->stream->width || ! $this->stream->height) {
+            return false;
+        }
+
+        // Above 1080p the probe is the encode's size several times over: two 2160p samples at once
+        // are ~25 GB on top of a full node, and sixteen of them outlast PrepareVideoJob's timeout
+        // (measured 624 s for the first two anchors on a loaded 224-thread box). Until the probe
+        // can run on the heavy pool, such a rung encodes at the template's CRF under its maxrate.
+        if ($this->stream->isHeavyEncode()) {
+            Log::info('Per-title skipped: rendition above 1080p encodes at the template CRF', ['stream' => $this->stream->id]);
+
             return false;
         }
 

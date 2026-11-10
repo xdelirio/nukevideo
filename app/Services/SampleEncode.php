@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Stream;
+use App\Support\OomScore;
 use Closure;
 use Illuminate\Process\Exceptions\ProcessTimedOutException;
 use Illuminate\Support\Collection;
@@ -140,7 +141,7 @@ class SampleEncode
         $startedAt = microtime(true);
 
         try {
-            $result = Process::timeout(self::TIMEOUT)->run($command, fn () => $tick ? $tick() : null);
+            $result = Process::timeout(self::TIMEOUT)->run(OomScore::wrap($command, OomScore::probe()), fn () => $tick ? $tick() : null);
 
             return new SampleResult(
                 $command,

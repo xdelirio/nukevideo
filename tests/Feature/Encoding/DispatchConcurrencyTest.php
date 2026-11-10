@@ -56,18 +56,19 @@ beforeEach(function () {
     };
 });
 
-it('dispatches as many videos as the family has nodes, plus one', function () {
-    // One CPU node in the fixture, so two: one encoding, one preparing.
+it('dispatches two videos per node of the family, plus one', function () {
+    // One CPU node in the fixture, so three: one encoding, one preparing behind it, one spare.
     collect(range(1, 5))->each(fn () => ($this->makeVideo)());
 
     $this->artisan('videos:dispatch')->assertSuccessful();
 
-    Queue::assertPushed(PrepareVideoJob::class, 2);
-    expect(Video::where('status', VideoStatus::RUNNING->value)->count())->toBe(2)
-        ->and(Video::where('status', VideoStatus::PENDING->value)->count())->toBe(3);
+    Queue::assertPushed(PrepareVideoJob::class, 3);
+    expect(Video::where('status', VideoStatus::RUNNING->value)->count())->toBe(3)
+        ->and(Video::where('status', VideoStatus::PENDING->value)->count())->toBe(2);
 });
 
 it('counts what is already in flight against the same cap', function () {
+    ($this->makeVideo)('running');
     ($this->makeVideo)('running');
     ($this->makeVideo)('uploading');
     ($this->makeVideo)();
@@ -84,12 +85,12 @@ it('grows with the fleet instead of waiting for someone to edit a config', funct
         'name' => "cpu-{$i}", 'ip_address' => "10.0.1.{$i}", 'type' => 'worker',
     ]));
 
-    collect(range(1, 9))->each(fn () => ($this->makeVideo)());
+    collect(range(1, 12))->each(fn () => ($this->makeVideo)());
 
     $this->artisan('videos:dispatch')->assertSuccessful();
 
-    // Four CPU nodes now, so five.
-    Queue::assertPushed(PrepareVideoJob::class, 5);
+    // Four CPU nodes now, so nine.
+    Queue::assertPushed(PrepareVideoJob::class, 9);
 });
 
 it('counts only the nodes of that video\'s own hardware', function () {
@@ -102,8 +103,8 @@ it('counts only the nodes of that video\'s own hardware', function () {
 
     $this->artisan('videos:dispatch')->assertSuccessful();
 
-    // Still one CPU node, so still two.
-    Queue::assertPushed(PrepareVideoJob::class, 2);
+    // Still one CPU node, so still three.
+    Queue::assertPushed(PrepareVideoJob::class, 3);
 });
 
 it('dispatches nothing at all while no worker node is active', function () {
@@ -117,7 +118,8 @@ it('dispatches nothing at all while no worker node is active', function () {
 });
 
 it('takes the oldest waiting video first', function () {
-    ($this->makeVideo)('running');   // fills the family's first slot, leaving exactly one
+    ($this->makeVideo)('running');   // fill the family's slots but one
+    ($this->makeVideo)('running');
 
     // Arrival is insertion order: the dispatcher walks by id, and nothing ever re-inserts a video.
     $older = ($this->makeVideo)();
@@ -152,7 +154,8 @@ it('does not let a busy GPU family hold back the CPU queue', function () {
 });
 
 it('still holds a video back when its own family is full', function () {
-    // One CPU node means two slots; both taken.
+    // One CPU node means three slots; all taken.
+    ($this->makeVideo)('running');
     ($this->makeVideo)('running');
     ($this->makeVideo)('running');
     $waiting = ($this->makeVideo)();

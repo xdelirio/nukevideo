@@ -8,6 +8,7 @@
  */
 
 use App\Services\ChunkTranscodeService;
+use App\Services\Concerns\BuildsArguments;
 use App\Services\Concerns\ResolvesRateControl;
 use App\Services\QualityBitrateProbe;
 use Illuminate\Support\Facades\Log;
@@ -378,4 +379,30 @@ describe('needsQualityBitrateProbe', function () {
         'pinned ABR' => [['video_codec' => 'av1_qsv', 'constant_bitrate' => '2500k'], LIGHT_SOURCE],
         'unknown source bitrate' => [['video_codec' => 'av1_qsv', 'qsv_global_quality' => 22], ['source_codec' => 'h264', 'source_width' => 1920, 'source_height' => 1080]],
     ]);
+});
+
+describe('bitrate suffixes', function () {
+    it('hands ffmpeg a mega suffix it reads as mega', function () {
+        // To ffmpeg a lowercase `m` is milli: `-maxrate 6m` is no cap at all. The catalogue's
+        // rule accepts either case, and the rest of the app reads both as mega.
+        $harness = new class
+        {
+            use BuildsArguments;
+
+            public function render(string $template, string $value): string
+            {
+                $args = [];
+                $this->appendArgument($args, ['template' => $template], $value);
+
+                return $args[0];
+            }
+        };
+
+        expect($harness->render('-maxrate %s', '6m'))->toBe('-maxrate 6M')
+            ->and($harness->render('-bufsize %s', '12m'))->toBe('-bufsize 12M')
+            ->and($harness->render('-b:v %s', '6M'))->toBe('-b:v 6M')
+            ->and($harness->render('-maxrate %s', '6000k'))->toBe('-maxrate 6000k')
+            // Not a bitrate: a value that merely ends in `m` is left alone.
+            ->and($harness->render('-profile:v %s', 'm'))->toBe('-profile:v m');
+    });
 });

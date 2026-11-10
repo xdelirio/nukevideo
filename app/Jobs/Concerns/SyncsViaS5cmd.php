@@ -2,11 +2,14 @@
 
 namespace App\Jobs\Concerns;
 
+use App\Exceptions\StoreTransferException;
 use App\Models\Video;
 use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\ManifestEditor;
+use Illuminate\Process\ProcessResult;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
-use RuntimeException;
+use Illuminate\Support\Sleep;
 
 /**
  * Thin wrapper over `s5cmd sync` for transfers between local scratch and an S3-compatible disk.
@@ -34,6 +37,59 @@ trait SyncsViaS5cmd
         'mp4' => 'video/mp4',
         'm4s' => 'video/iso.segment',
     ];
+
+    /**
+     * Seconds to wait before running a failed transfer again, one entry per extra attempt. The
+     * store rejects requests in bursts: over the incident of 2026-11-08..10 the primary answered
+     * `SignatureDoesNotMatch` for 1-66 segment PUTs out of thousands in a sync, in bursts lasting up
+     * to 216 s, and cut source downloads short with `unexpected EOF`. s5cmd retries neither, so one
+     * rejected object used to fail the whole job, and the second such job failed a video that had
+     * every chunk encoded. Running the same command again is cheap: `sync` skips what already
+     * landed, so only the rejected objects travel twice.
+     */
+    private const TRANSFER_BACKOFF = [5, 30, 90];
+
+    /** Not worth another attempt with less than this left of the caller's budget. */
+    private const TRANSFER_MIN_REMAINING = 60;
+
+    /**
+     * Run a transfer, and run it again after a failure while the caller's time budget lasts. The
+     * budget is shared by every attempt, so the retries can never outlive the job's own timeout.
+     *
+     * @param  callable(int): ProcessResult  $run  given the seconds it may still take
+     */
+    private function withTransferRetries(callable $run, int $timeout, Video $video, string $disk, string $what): void
+    {
+        $deadline = microtime(true) + $timeout;
+
+        foreach ([...self::TRANSFER_BACKOFF, null] as $attempt => $backoff) {
+            $result = $run(max(1, (int) ($deadline - microtime(true))));
+
+            if ($result->successful()) {
+                return;
+            }
+
+            $remaining = $deadline - microtime(true);
+
+            if ($backoff === null || $remaining < $backoff + self::TRANSFER_MIN_REMAINING) {
+                throw new StoreTransferException($disk, "{$what}: {$result->errorOutput()}");
+            }
+
+            Log::warning('S3 transfer failed; trying again', [
+                'video' => $video->id,
+                'transfer' => $what,
+                'attempt' => $attempt + 1,
+                'retry_in' => $backoff,
+                'error' => mb_substr($result->errorOutput(), 0, 500),
+            ]);
+
+            // In slices, so the reaper keeps seeing a live worker through the longest wait.
+            for ($waited = 0; $waited < $backoff; $waited += 5) {
+                $this->heartbeat($video);
+                Sleep::for(min(5, $backoff - $waited))->seconds();
+            }
+        }
+    }
 
     /**
      * {@see s5cmdSync} of a packaged tree to the playback zone: one pass per known extension with
@@ -68,15 +124,17 @@ trait SyncsViaS5cmd
     {
         $cfg = config("filesystems.disks.{$disk}");
 
-        $result = Process::timeout($timeout)
-            ->env($this->s5cmdEnv($cfg))
-            ->run([...$this->s5cmdBase($cfg), 'sync', ...$extraArgs, $source, $dest], function () use ($video) {
-                $this->heartbeat($video);
-            });
-
-        if (! $result->successful()) {
-            throw new RuntimeException("s5cmd sync failed ({$source} → {$dest}): {$result->errorOutput()}");
-        }
+        $this->withTransferRetries(
+            fn (int $remaining) => Process::timeout($remaining)
+                ->env($this->s5cmdEnv($cfg))
+                ->run([...$this->s5cmdBase($cfg), 'sync', ...$extraArgs, $source, $dest], function () use ($video) {
+                    $this->heartbeat($video);
+                }),
+            $timeout,
+            $video,
+            $disk,
+            "s5cmd sync failed ({$source} → {$dest})",
+        );
     }
 
     /**
@@ -89,20 +147,18 @@ trait SyncsViaS5cmd
     {
         $cfg = config("filesystems.disks.{$disk}");
 
-        $process = Process::timeout($timeout)
-            ->env($this->s5cmdEnv($cfg))
-            ->start([...$this->s5cmdBase($cfg), 'cp', $source, $dest]);
+        $this->withTransferRetries(function (int $remaining) use ($cfg, $source, $dest, $video) {
+            $process = Process::timeout($remaining)
+                ->env($this->s5cmdEnv($cfg))
+                ->start([...$this->s5cmdBase($cfg), 'cp', $source, $dest]);
 
-        while ($process->running()) {
-            $this->heartbeat($video); // self-throttles to one write per interval
-            usleep(5_000_000);
-        }
+            while ($process->running()) {
+                $this->heartbeat($video); // self-throttles to one write per interval
+                usleep(5_000_000);
+            }
 
-        $result = $process->wait();
-
-        if (! $result->successful()) {
-            throw new RuntimeException("s5cmd cp failed ({$source} → {$dest}): {$result->errorOutput()}");
-        }
+            return $process->wait();
+        }, $timeout, $video, $disk, "s5cmd cp failed ({$source} → {$dest})");
     }
 
     /** AWS credential env for the disk; the region falls back since s5cmd requires one. */

@@ -13,8 +13,11 @@ use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\EncodeCommandBuilder;
 use App\Services\UsageService;
 use App\Services\VideoService;
+use App\Support\Cpu;
 use App\Support\MediaDuration;
 use App\Support\MediaSource;
+use App\Support\Memory;
+use App\Support\OomScore;
 use App\Support\Scratch;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
@@ -46,6 +49,15 @@ class ProcessChunkJob implements ShouldQueue
     public $maxExceptions = 2;
 
     public $backoff = [30];
+
+    /**
+     * Seconds a chunk may wait for memory. With ffmpeg's own limit it must stay well inside the
+     * job's timeout, which also has to cover the upload that follows.
+     */
+    private const ROOM_WAIT = 60;
+
+    /** Long enough for the memory peak that killed it to pass, short enough not to idle the slot. */
+    private const OOM_RELEASE_DELAY = 30;
 
     public function __construct(
         public int $streamId,
@@ -109,6 +121,10 @@ class ProcessChunkJob implements ShouldQueue
 
         Scratch::ensureDirectory(dirname($localPath));
 
+        // Before the clock below starts: time spent waiting for memory is not encode time, and
+        // that clock is what the account is billed for.
+        $this->waitForRoom($stream, $video);
+
         $startedAt = microtime(true);
         $windowDuration = max(0.0, $this->end - $this->start);
 
@@ -118,7 +134,7 @@ class ProcessChunkJob implements ShouldQueue
         try {
             // A failed encode may leave a partial .part behind; harmless — the retry overwrites
             // it (`-y`) and only a whole output is uploaded below.
-            $this->encode($stream, $sourceUrl, $localPath, $video, $outputs, $windowDuration);
+            $encoded = $this->encode($stream, $sourceUrl, $localPath, $video, $outputs, $windowDuration);
         } finally {
             UsageService::record(
                 $video->user_id,
@@ -130,7 +146,11 @@ class ProcessChunkJob implements ShouldQueue
             );
         }
 
-        $this->assertWindowEncoded($stream, $sourceUrl, $localPath, $video, $outputs, $windowDuration);
+        // Released after an OOM kill: the next attempt encodes the window again.
+        if (! $encoded || ! $this->assertWindowEncoded($stream, $sourceUrl, $localPath, $video, $outputs, $windowDuration)) {
+            return;
+        }
+
         $this->upload($chunkKey, $localPath);
         $this->reportDone($outputs);
     }
@@ -140,12 +160,13 @@ class ProcessChunkJob implements ShouldQueue
      * read that dies mid-window still exits 0, and a chunk that stops short would concat into a
      * rendition shorter than the manifest declares.
      */
-    private function assertWindowEncoded(Stream $stream, string $sourceUrl, string $localPath, Video $video, $outputs, float $windowDuration): void
+    /** False when the gap-fill re-encode was OOM-killed and the job released itself. */
+    private function assertWindowEncoded(Stream $stream, string $sourceUrl, string $localPath, Video $video, $outputs, float $windowDuration): bool
     {
         $short = MediaDuration::truncated($localPath, $windowDuration);
 
         if ($short === null) {
-            return;
+            return true;
         }
 
         // A source that simply holds no picture there — a damaged rip, a few seconds with audio
@@ -165,7 +186,10 @@ class ProcessChunkJob implements ShouldQueue
                 'to' => round($this->end, 3),
             ]);
 
-            $this->encode($stream, $sourceUrl, $localPath, $video, $outputs, $windowDuration, $timing);
+            if (! $this->encode($stream, $sourceUrl, $localPath, $video, $outputs, $windowDuration, $timing)) {
+                return false;
+            }
+
             $short = MediaDuration::truncated($localPath, $windowDuration);
         }
 
@@ -173,6 +197,41 @@ class ProcessChunkJob implements ShouldQueue
             throw new RuntimeException(
                 "Chunk {$this->chunkIndex} of stream {$this->streamId} encoded {$short}s of {$windowDuration}s; source read truncated"
             );
+        }
+
+        return true;
+    }
+
+    /**
+     * Start ffmpeg only once the node has the memory this encode will take. The pools are sized
+     * at boot from the hardware, which cannot know what will be queued: this is the half of the
+     * sizing that looks at the node as it is right now — the chunk store on the same host, an
+     * orphaned process, a pool that happens to hold nothing but full-frame 1080p.
+     *
+     * A common chunk asks for its own picture plus the node's reserve. A rendition above 1080p
+     * asks for room for every heavy encode the node may run at once, which is what keeps two jobs
+     * that read the same free memory in the same second from both taking it. The wait is short —
+     * chunks finish every half minute and hand their memory back — and bounded ({@see ROOM_WAIT}). Past it the encode starts anyway and, if the kernel does
+     * kill it, is released and tried again ({@see OomScore}).
+     */
+    private function waitForRoom(Stream $stream, Video $video): void
+    {
+        $encode = Cpu::encodeMemoryGb((int) $stream->width, (int) $stream->height);
+
+        // Never more than half the node for a common chunk: on a box too small for the budget the
+        // gate would otherwise hold every chunk for its whole wait, and such a box encodes one at
+        // a time anyway.
+        $needed = $stream->isHeavyEncode()
+            ? $encode * Cpu::heavyWorkerProcesses()
+            : min($encode + Cpu::reservedGb(), Cpu::memoryGb() / 2);
+
+        if (! Memory::waitFor($needed, self::ROOM_WAIT, fn () => $this->heartbeat($video))) {
+            Log::warning('Chunk starts without the memory it wanted', [
+                'stream' => $this->streamId,
+                'chunk' => $this->chunkIndex,
+                'wanted_gb' => round($needed, 1),
+                'available_gb' => round((float) Memory::availableGb(), 1),
+            ]);
         }
     }
 
@@ -187,9 +246,13 @@ class ProcessChunkJob implements ShouldQueue
      * Encode this rendition's chunk, beating the heartbeat and reporting per-chunk progress off
      * ffmpeg's `time=` output to every output the stream belongs to.
      *
+     * False when ffmpeg was SIGKILLed — the OOM killer, given {@see OomScore} — and the job released
+     * itself: memory pressure is a reason to try again, not a verdict on the window, and as an
+     * exception it would spend one of the two counted failures that fail the whole video.
+     *
      * @param  \Illuminate\Support\Collection<int,Output>  $outputs
      */
-    private function encode(Stream $stream, string $sourceUrl, string $localPath, Video $video, $outputs, float $windowDuration, ?array $gapFill = null): void
+    private function encode(Stream $stream, string $sourceUrl, string $localPath, Video $video, $outputs, float $windowDuration, ?array $gapFill = null): bool
     {
         $command = EncodeCommandBuilder::build(
             new Collection([$stream]),
@@ -205,7 +268,7 @@ class ProcessChunkJob implements ShouldQueue
         $progress = new ChunkProgressReporter($outputs, $this->chunkIndex, $this->streamId, $windowDuration);
 
         $process = Process::timeout(self::ffmpegTimeout())->run(
-            $command,
+            OomScore::wrap($command, OomScore::chunk()),
             function (string $_type, string $output) use ($video, $progress) {
                 $this->heartbeat($video);
                 $progress->handle($output);
@@ -213,7 +276,26 @@ class ProcessChunkJob implements ShouldQueue
         );
 
         if ($process->successful()) {
-            return;
+            return true;
+        }
+
+        if (OomScore::killed($process->exitCode())) {
+            Log::warning('Chunk ffmpeg killed by SIGKILL (likely OOM)', [
+                'stream' => $this->streamId,
+                'chunk' => $this->chunkIndex,
+                'attempt' => $this->attempts(),
+            ]);
+
+            // Bounded by $tries: a window that is killed on every attempt is too big for any node
+            // it lands on, and that is a failure worth reporting rather than retrying forever.
+            if ($this->attempts() >= $this->tries) {
+                throw new RuntimeException("Chunk OOM-killed {$this->attempts()} times");
+            }
+
+            // Returned at once: an exception after a release would still be counted.
+            $this->release(self::OOM_RELEASE_DELAY);
+
+            return false;
         }
 
         if (EncodeInterruptedException::causedTermination($process->errorOutput())) {

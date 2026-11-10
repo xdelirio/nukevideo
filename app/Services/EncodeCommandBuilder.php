@@ -35,8 +35,12 @@ class EncodeCommandBuilder
 
         $windowed = $start !== null && $end !== null;
 
+        // Microseconds, not tenths of a millisecond: window bounds are keyframe timestamps, and at
+        // four decimals an MP4 source's 1/24000-style timebase rounds to the wrong side of a frame
+        // often enough to matter — neighbouring chunks then both hold it, or neither does, and
+        // every such join moves the picture a frame against the single-pass audio.
         $seek = $windowed
-            ? sprintf('-ss %.4f -to %.4f ', $start, $end)
+            ? sprintf('-ss %.6f -to %.6f ', $start, $end)
             : '';
 
         // Decode-side flags (hwaccel / thread cap) only apply to single-rendition video jobs;

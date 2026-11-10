@@ -448,6 +448,33 @@ describe('apply against the source bitrate', function () {
         expect($stream->refresh()->input_params['svtav1_crf'])->toBe(28);
     });
 
+    it('records that stepping up was cut short for time, and that the CRF sits on the top anchor', function () use ($hd, $hdSource) {
+        // 21% of production 1080p: a loaded node spent its fixed 420 s on the first two anchors,
+        // the third never ran, and nothing in the stream said so.
+        fakeAnchors([26 => 97.5, 34 => 96.8], [26 => 3_300_000, 34 => 2_400_000], 8_000_000);
+        $stream = persistedPerTitleStream($hd, $hdSource, 1920, 1080);
+
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0, stepUpBudget: 0.0);
+
+        expect($stream->refresh()->meta['per_title']['step_up_cut'])->toBe('time')
+            ->and($stream->meta['per_title']['anchors'])->toHaveCount(2)
+            ->and($stream->input_params['svtav1_crf'])->toBe(34);
+    });
+
+    it('keeps stepping up while the job still has time for it', function () use ($hd, $hdSource) {
+        fakeAnchors(
+            [26 => 97.5, 34 => 96.8, 42 => 95.2, 50 => 93.0],
+            [26 => 3_300_000, 34 => 2_400_000, 42 => 1_700_000, 50 => 1_150_000],
+            8_000_000,
+        );
+        $stream = persistedPerTitleStream($hd, $hdSource, 1920, 1080);
+
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0, stepUpBudget: 600.0);
+
+        expect($stream->refresh()->meta['per_title']['step_up_cut'])->toBeNull()
+            ->and($stream->meta['per_title']['anchors'])->toHaveCount(4);
+    });
+
     it('decides on the anchors it has when an extra one fails', function () use ($hd, $hdSource) {
         fakeAnchors(
             [26 => 97.5, 34 => 96.8, 42 => array_fill(0, SampleEncode::WINDOWS, null)],

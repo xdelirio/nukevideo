@@ -1,11 +1,15 @@
 <?php
 
+use App\Jobs\PackageVideoJob;
 use App\Models\Project;
 use App\Models\Template;
 use App\Models\User;
 use App\Models\Video;
 use App\Services\NodeService;
+use App\Support\PrepClaim;
+use Illuminate\Bus\UniqueLock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -114,5 +118,38 @@ describe('videos:reap', function () {
         $this->artisan('videos:reap')->assertSuccessful();
 
         expect($video->fresh()->status)->toBe('failed');
+    });
+
+    it('leaves a video alone while its preparation is still owed by the queue', function () {
+        // A claimed prep waiting behind other preps beats no heartbeat, and neither does one whose
+        // worker died until its redelivery 31 minutes later: the claim key is what says it is coming.
+        $video = stalledVideo(60);
+        PrepClaim::issue($video->id);
+
+        $this->artisan('videos:reap')->assertSuccessful();
+
+        expect($video->fresh()->status)->toBe('running');
+    });
+
+    it('fails a stale video once nothing is owed to it', function () {
+        $video = stalledVideo(60);
+
+        $this->artisan('videos:reap')->assertSuccessful();
+
+        expect($video->fresh()->status)->toBe('failed');
+    });
+
+    it('leaves a video alone while its packaging still holds its unique lock', function () {
+        // A queued or redelivered package job beats nothing until it starts; its lock is held
+        // from dispatch until it finishes or expires, and reading it must never take it.
+        $video = stalledVideo(60);
+        $video->update(['status' => 'uploading']);
+        $lock = Cache::lock(UniqueLock::getKey(new PackageVideoJob($video->id)), 10800);
+        $lock->get();
+
+        $this->artisan('videos:reap')->assertSuccessful();
+
+        expect($video->fresh()->status)->toBe('uploading')
+            ->and($lock->isOwnedByCurrentProcess())->toBeTrue();
     });
 });
