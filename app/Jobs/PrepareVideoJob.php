@@ -414,13 +414,19 @@ class PrepareVideoJob implements ShouldQueue
      * Seconds the next rendition's probe may take and still measure another anchor: an even share
      * of what this attempt has left, once the steps that follow the probes are set aside. Derived
      * from the clock rather than fixed, so an idle node and a short download buy a better answer
-     * and a slow one still leaves the job time to plan and fan out.
+     * and a slow one still leaves the job time to plan and fan out. Never less than nothing: a
+     * late job simply measures no extra anchor.
      */
-    private function probeBudget(int $renditionsLeft): float
+    private function probeBudget(int $renditionsLeft): ?float
     {
+        // No clock, no opinion: the probe falls back to its own fixed budget.
+        if ($this->startedAt <= 0.0) {
+            return null;
+        }
+
         $left = $this->timeout - (microtime(true) - $this->startedAt) - self::AFTER_PROBES_RESERVE;
 
-        return $left / max(1, $renditionsLeft);
+        return max(0.0, $left) / max(1, $renditionsLeft);
     }
 
     /**

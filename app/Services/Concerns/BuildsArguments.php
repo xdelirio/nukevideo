@@ -39,7 +39,7 @@ trait BuildsArguments
      */
     private function megaSuffix(string $template, string $value): string
     {
-        $isBitrate = in_array(strtok($template, ' '), ['-maxrate', '-bufsize', '-b:v', '-b:a', '-minrate'], true);
+        $isBitrate = in_array(explode(' ', $template)[0], ['-maxrate', '-bufsize', '-b:v', '-b:a', '-minrate'], true);
 
         return $isBitrate && preg_match('/^\d+(\.\d+)?m$/', $value) ? substr($value, 0, -1).'M' : $value;
     }

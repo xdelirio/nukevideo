@@ -12,7 +12,11 @@ use Illuminate\Support\Sleep;
  */
 class Memory
 {
-    private const POLL_SECONDS = 5;
+    /**
+     * Seconds between two looks, picked at random each time: a pool of jobs waiting on the same
+     * node would otherwise all look in the same instant, all see the same room, and all take it.
+     */
+    private const POLL_SECONDS = [3, 7];
 
     /** `MemAvailable` in GB, or null where /proc/meminfo cannot be read (not Linux, or a test). */
     public static function availableGb(): ?float
@@ -34,7 +38,7 @@ class Memory
      */
     public static function waitFor(float $gb, int $maxSeconds, Closure $tick): bool
     {
-        for ($waited = 0; ; $waited += self::POLL_SECONDS) {
+        for ($waited = 0; ; $waited += $pause) {
             $available = self::availableGb();
 
             if ($available === null || $available >= $gb) {
@@ -45,8 +49,10 @@ class Memory
                 return false;
             }
 
+            $pause = random_int(...self::POLL_SECONDS);
+
             $tick();
-            Sleep::for(self::POLL_SECONDS)->seconds();
+            Sleep::for($pause)->seconds();
         }
     }
 }

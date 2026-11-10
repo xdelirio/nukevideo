@@ -526,10 +526,7 @@ class NodeService
             // holding the fleet's mirrored sources and chunks.
             'volumes' => [Node::containerPrefix().'_chunks:/data'],
             // $CHUNK_STORE_IP is resolved by worker.sh, on the node.
-            // Last in line for the kernel's OOM killer. The store shares its host with a worker,
-            // and every node reads its sources and writes its chunks there: an ffmpeg killed costs
-            // one chunk, the store killed costs the fleet whatever it had in flight.
-            'raw' => ['-p "$CHUNK_STORE_IP:$CHUNK_STORE_PORT:9000"', '--oom-score-adj -900'],
+            'raw' => ['-p "$CHUNK_STORE_IP:$CHUNK_STORE_PORT:9000"'],
             'command' => '/data',
         ];
 

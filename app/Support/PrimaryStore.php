@@ -21,18 +21,22 @@ class PrimaryStore
      *  a recovered store is back in use within one coffee. */
     private const HOLD_SECONDS = 600;
 
+    /**
+     * Every call here degrades to "no note": the note is advice, and a cache that cannot be reached
+     * must cost neither the job that wanted to leave it nor the dispatch tick that wanted to read it.
+     */
     public static function markUnavailable(string $reason): void
     {
-        Cache::put(self::KEY, mb_substr($reason, 0, 300), self::HOLD_SECONDS);
+        rescue(fn () => Cache::put(self::KEY, mb_substr($reason, 0, 300), self::HOLD_SECONDS), report: false);
     }
 
     public static function unavailable(): bool
     {
-        return Cache::has(self::KEY);
+        return (bool) rescue(fn () => Cache::has(self::KEY), false, report: false);
     }
 
     public static function reason(): ?string
     {
-        return Cache::get(self::KEY);
+        return rescue(fn () => Cache::get(self::KEY), null, report: false);
     }
 }

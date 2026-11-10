@@ -25,8 +25,7 @@ it('waits out its whole budget and then says the room never came', function () {
         $ticks++;
     });
 
+    // Polls are 3-7 s apart, so 20 s of waiting is three to seven looks.
     expect($room)->toBeFalse()
-        ->and($ticks)->toBe(4);
-
-    Sleep::assertSleptTimes(4);
+        ->and($ticks)->toBeBetween(3, 7);
 })->skip(fn () => Memory::availableGb() === null, 'needs /proc/meminfo');

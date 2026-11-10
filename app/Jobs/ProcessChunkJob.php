@@ -50,8 +50,11 @@ class ProcessChunkJob implements ShouldQueue
 
     public $backoff = [30];
 
-    /** Seconds a chunk may wait for memory: what the job's timeout leaves over ffmpeg's own. */
-    private const ROOM_WAIT = 90;
+    /**
+     * Seconds a chunk may wait for memory. With ffmpeg's own limit it must stay well inside the
+     * job's timeout, which also has to cover the upload that follows.
+     */
+    private const ROOM_WAIT = 60;
 
     /** Long enough for the memory peak that killed it to pass, short enough not to idle the slot. */
     private const OOM_RELEASE_DELAY = 30;
@@ -117,6 +120,10 @@ class ProcessChunkJob implements ShouldQueue
         $video->heartbeat();
 
         Scratch::ensureDirectory(dirname($localPath));
+
+        // Before the clock below starts: time spent waiting for memory is not encode time, and
+        // that clock is what the account is billed for.
+        $this->waitForRoom($stream, $video);
 
         $startedAt = microtime(true);
         $windowDuration = max(0.0, $this->end - $this->start);
@@ -204,8 +211,7 @@ class ProcessChunkJob implements ShouldQueue
      * A common chunk asks for its own picture plus the node's reserve. A rendition above 1080p
      * asks for room for every heavy encode the node may run at once, which is what keeps two jobs
      * that read the same free memory in the same second from both taking it. The wait is short —
-     * chunks finish every half minute and hand their memory back — and bounded by what the job's
-     * timeout leaves over ffmpeg's own. Past it the encode starts anyway and, if the kernel does
+     * chunks finish every half minute and hand their memory back — and bounded ({@see ROOM_WAIT}). Past it the encode starts anyway and, if the kernel does
      * kill it, is released and tried again ({@see OomScore}).
      */
     private function waitForRoom(Stream $stream, Video $video): void
@@ -260,8 +266,6 @@ class ProcessChunkJob implements ShouldQueue
         Log::debug($command);
 
         $progress = new ChunkProgressReporter($outputs, $this->chunkIndex, $this->streamId, $windowDuration);
-
-        $this->waitForRoom($stream, $video);
 
         $process = Process::timeout(self::ffmpegTimeout())->run(
             OomScore::wrap($command, OomScore::chunk()),

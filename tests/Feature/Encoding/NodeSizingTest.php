@@ -20,6 +20,11 @@ describe('workerProcesses', function () {
         expect(Cpu::workerProcesses(10, 64.0))->toBe(2);
     });
 
+    it('does not take an encode away from a small box', function () {
+        // Two encodes at four threads is what an 8-core node has always run.
+        expect(Cpu::workerProcesses(8, 16.0))->toBe(2);
+    });
+
     it('still encodes on a box too small for one full budget', function () {
         expect(Cpu::workerProcesses(2, 4.0))->toBe(1)
             ->and(Cpu::workerProcesses(1, 1.0))->toBe(1);

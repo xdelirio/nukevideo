@@ -114,7 +114,8 @@ class Cpu
      */
     public static function workerProcesses(int $cores, float $memoryGb): int
     {
-        $byCpu = intdiv(max(1, $cores), self::CORES_PER_ENCODE);
+        // Rounded, not floored: an 8-core box carries two encodes as it always has, not one.
+        $byCpu = (int) round(max(1, $cores) / self::CORES_PER_ENCODE);
         $byMemory = (int) floor(self::usableGb($memoryGb) / self::ENCODE_MEMORY_GB);
 
         return max(1, min($byCpu, $byMemory));
