@@ -45,7 +45,7 @@ the next worker created claims it, or set it by hand.
 
 ### Job Distribution
 
-Workers are not assigned videos: they pull. `videos:dispatch` (every five seconds on the API host) admits pending videos while each hardware family — CPU, Intel, NVIDIA — has fewer videos in flight than it has active worker nodes plus one, and a video's chunk jobs then go to its family's queue, drained by every worker of that family. GPU nodes do not drain the CPU queue. How many chunks a node encodes at once is sized from its CPU cores and RAM when the container starts; `VIDEO_WORKER_PROCESSES` (CPU) or `GPU_WORKER_PROCESSES` in the node's environment overrides it.
+Workers are not assigned videos: they pull. `videos:dispatch` (every five seconds on the API host) admits pending videos while each hardware family — CPU, Intel, NVIDIA — has fewer videos in flight than twice its active worker nodes plus one, and a video's chunk jobs then go to its family's queue, drained by every worker of that family. GPU nodes do not drain the CPU queue. Software renditions above 1080p go to a queue of their own, `video-processing-heavy`, which every CPU worker drains with one or two processes that wait for free memory before encoding. Admission pauses for ten minutes whenever a job runs out of attempts against the primary store, so an outage there costs a wait rather than videos. How many chunks a node encodes at once is sized from its CPU cores and RAM when the container starts; `VIDEO_WORKER_PROCESSES` and `HEAVY_WORKER_PROCESSES` (CPU) or `GPU_WORKER_PROCESSES` in the node's environment override it.
 
 ## Proxy Nodes
 

@@ -63,7 +63,7 @@ beforeEach(function () {
 });
 
 it('dispatches high before normal before low, oldest first within each level', function () {
-    // One CPU node: two slots per tick.
+    // One CPU node: three slots per tick.
     Node::create(['name' => 'cpu-01', 'ip_address' => '10.0.0.20', 'type' => 'worker']);
 
     ($this->makeVideo)('old-low', 'low');
@@ -73,16 +73,16 @@ it('dispatches high before normal before low, oldest first within each level', f
 
     $this->artisan('videos:dispatch')->assertSuccessful();
 
-    expect(($this->running)())->toBe(['new-high', 'old-normal']);
+    expect(($this->running)())->toBe(['new-high', 'newer-normal', 'old-normal']);
 
-    // Free both slots: the remaining normal goes before the low that has waited longest.
+    // Free the slots: a low only runs once nothing above it is waiting.
     Video::where('status', VideoStatus::RUNNING->value)->update(['status' => VideoStatus::COMPLETED->value]);
     Queue::fake();
 
     $this->artisan('videos:dispatch')->assertSuccessful();
 
-    expect(($this->running)())->toBe(['newer-normal', 'old-low']);
-    Queue::assertPushed(PrepareVideoJob::class, 2);
+    expect(($this->running)())->toBe(['old-low']);
+    Queue::assertPushed(PrepareVideoJob::class, 1);
 });
 
 it('does not let a high-priority video waiting on missing hardware hold back the CPU queue', function () {
@@ -112,10 +112,10 @@ it('stops walking the backlog once every family is full', function () {
     DB::enableQueryLog();
     $this->artisan('videos:dispatch')->assertSuccessful();
 
-    // Once both slots are taken the loop returns, so the low level is never even queried.
+    // Once every slot is taken the loop returns, so the low level is never even queried.
     $queriedLow = collect(DB::getQueryLog())->contains(fn (array $query) => in_array('low', $query['bindings'], true));
 
-    expect(($this->running)())->toBe(['clip-1', 'clip-2'])
+    expect(($this->running)())->toBe(['clip-1', 'clip-2', 'clip-3'])
         ->and($queriedLow)->toBeFalse();
 });
 

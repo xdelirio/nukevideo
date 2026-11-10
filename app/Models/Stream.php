@@ -6,6 +6,7 @@ use App\Enums\StreamStatus;
 use App\Observers\StreamObserver;
 use App\Services\ChunkTranscodeService;
 use App\Services\PackagerCommandBuilder;
+use App\Support\Cpu;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -15,6 +16,9 @@ use Illuminate\Support\Str;
 #[ObservedBy(StreamObserver::class)]
 class Stream extends Model
 {
+    /** Where software encodes above 1080p queue: {@see isHeavyEncode}. */
+    public const HEAVY_QUEUE = 'video-processing-heavy';
+
     protected $fillable = [
         'video_id',
         'name',
@@ -67,7 +71,24 @@ class Stream extends Model
     {
         $accel = ChunkTranscodeService::accelForCodec(data_get($this->input_params, 'video_codec'));
 
-        return $accel ? "video-processing-{$accel}" : 'video-processing';
+        if ($accel) {
+            return "video-processing-{$accel}";
+        }
+
+        return $this->isHeavyEncode() ? self::HEAVY_QUEUE : 'video-processing';
+    }
+
+    /**
+     * Whether this rendition is above 1080p on a software encoder. One 2160p encode holds what
+     * four 1080p ones do, so these never share a pool sized for the common ladder: they queue on
+     * {@see HEAVY_QUEUE}, which every CPU worker drains with a couple of processes
+     * ({@see Cpu::heavyWorkerProcesses}). GPU encodes hold their frames in video memory instead.
+     */
+    public function isHeavyEncode(): bool
+    {
+        return $this->type === 'video'
+            && ! ChunkTranscodeService::accelForCodec(data_get($this->input_params, 'video_codec'))
+            && Cpu::isHeavy((int) $this->width, (int) $this->height);
     }
 
     /** This stream's `path` with the leading `{videoUlid}/` segment stripped, e.g. `video/{ulid}.mp4`.

@@ -3,6 +3,7 @@
 namespace Tests;
 
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Support\Sleep;
 use RuntimeException;
 
 abstract class TestCase extends BaseTestCase
@@ -29,5 +30,8 @@ abstract class TestCase extends BaseTestCase
         }
 
         parent::setUp();
+
+        // Nothing under test should really wait: the S3 transfer retries back off for minutes.
+        Sleep::fake();
     }
 }

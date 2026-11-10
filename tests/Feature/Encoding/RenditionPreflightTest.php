@@ -39,7 +39,7 @@ it('runs the real chunk command over one second of the source', function () {
 
     (new RenditionPreflight(preflightStream(qualityTemplate('libx264'))))->assert(sys_get_temp_dir().'/src.mkv');
 
-    Process::assertRan(fn ($process) => str_contains($process->command, '-ss 0.0000 -to 1.0000')
+    Process::assertRan(fn ($process) => str_contains($process->command, '-ss 0.000000 -to 1.000000')
         && str_contains($process->command, '-c:v libx264')
         && str_contains($process->command, '-crf 23'));
 });
@@ -84,7 +84,7 @@ describe('where the second comes from', function () {
 
         (new RenditionPreflight(preflightStream(qualityTemplate('libx264'))))->assert(sys_get_temp_dir().'/src.mkv', 3600.0);
 
-        Process::assertRan(fn ($process) => str_contains($process->command, '-ss 1800.0000 -to 1801.0000'));
+        Process::assertRan(fn ($process) => str_contains($process->command, '-ss 1800.000000 -to 1801.000000'));
     });
 
     it('keeps to the opening when the caller could not say how long the source is', function () {
@@ -92,7 +92,7 @@ describe('where the second comes from', function () {
 
         (new RenditionPreflight(preflightStream(qualityTemplate('libx264'))))->assert(sys_get_temp_dir().'/src.mkv');
 
-        Process::assertRan(fn ($process) => str_contains($process->command, '-ss 0.0000 -to 1.0000'));
+        Process::assertRan(fn ($process) => str_contains($process->command, '-ss 0.000000 -to 1.000000'));
     });
 
     it('never seeks past what a short clip actually holds', function (float $duration, string $window) {
@@ -102,9 +102,9 @@ describe('where the second comes from', function () {
 
         Process::assertRan(fn ($process) => str_contains($process->command, $window));
     })->with([
-        'a clip with no room for the sample anywhere but the start' => [1.0, '-ss 0.0000 -to 1.0000'],
-        'a clip shorter than the sample' => [0.4, '-ss 0.0000 -to 1.0000'],
-        'a clip just long enough to move off the opening' => [4.0, '-ss 2.0000 -to 3.0000'],
+        'a clip with no room for the sample anywhere but the start' => [1.0, '-ss 0.000000 -to 1.000000'],
+        'a clip shorter than the sample' => [0.4, '-ss 0.000000 -to 1.000000'],
+        'a clip just long enough to move off the opening' => [4.0, '-ss 2.000000 -to 3.000000'],
     ]);
 
     it('records what that second cost, from where it was taken', function () {

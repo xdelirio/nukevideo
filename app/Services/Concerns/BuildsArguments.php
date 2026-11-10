@@ -28,7 +28,20 @@ trait BuildsArguments
             return;
         }
 
-        $args[] = sprintf($config['template'], $this->assertSafeArgValue($value));
+        $args[] = sprintf($config['template'], $this->megaSuffix($config['template'], $this->assertSafeArgValue($value)));
+    }
+
+    /**
+     * `6m` → `6M` on a bitrate flag. The catalogue accepts either case and the rest of the app
+     * reads both as mega, but to ffmpeg a lowercase `m` is milli: `-maxrate 6m` is a cap of 0.006
+     * bits per second, which it treats as no cap at all, and `-b:v 6m` as no target. `k` and `K`
+     * are the same thing to both.
+     */
+    private function megaSuffix(string $template, string $value): string
+    {
+        $isBitrate = in_array(strtok($template, ' '), ['-maxrate', '-bufsize', '-b:v', '-b:a', '-minrate'], true);
+
+        return $isBitrate && preg_match('/^\d+(\.\d+)?m$/', $value) ? substr($value, 0, -1).'M' : $value;
     }
 
     /**

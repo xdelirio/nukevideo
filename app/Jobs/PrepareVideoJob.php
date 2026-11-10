@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Console\Commands\DispatchPendingVideosCommand;
 use App\Enums\VideoStatus;
+use App\Exceptions\StoreTransferException;
 use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Stream;
 use App\Models\Video;
@@ -13,6 +14,8 @@ use App\Services\CreateVideoStreamsService;
 use App\Services\PerTitleCrfService;
 use App\Services\QualityBitrateProbe;
 use App\Services\RenditionPreflight;
+use App\Support\PrepClaim;
+use App\Support\PrimaryStore;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -36,7 +39,9 @@ use Throwable;
  */
 class PrepareVideoJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, SyncsViaS5cmd;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, SyncsViaS5cmd {
+        SyncsViaS5cmd::heartbeat as private beatVideo;
+    }
 
     // tries absorbs redeliveries after a dead worker (OOM/restart/network); real errors stop at maxExceptions.
     public $tries = 5;
@@ -59,13 +64,57 @@ class PrepareVideoJob implements ShouldQueue
     // without a measurement. Kept out of $tries, which exists for dead workers, not for scheduling.
     private const MAX_NODE_HOPS = 3;
 
+    /**
+     * Seconds of the timeout kept for what follows the probes: the preflights, the keyframe scan
+     * and the fan-out, which pushes a long film's ~1,200 chunk jobs at 0.16-0.36 s each over the
+     * link to Redis (three preparations were killed in exactly that step).
+     */
+    private const AFTER_PROBES_RESERVE = 420;
+
+    /** When this attempt began; never serialised with a value, a redelivery starts its own clock. */
+    private float $startedAt = 0.0;
+
     private const NODE_HOP_DELAY = 5;
+
+    /** How often the claim's TTL is pushed out while the job works; well inside its six hours. */
+    private const CLAIM_REFRESH_SECONDS = 60;
+
+    /**
+     * The dispatcher's claim on the video ({@see PrepClaim}). Outside the constructor and null by
+     * default, so payloads pushed before claims existed still deserialize, and run as they did.
+     */
+    public ?string $claim = null;
+
+    private ?float $lastClaimRefreshAt = null;
 
     public function __construct(
         public int $videoId,
         public string $originalPath,
         public int $nodeHops = 0,
     ) {}
+
+    public function withClaim(?string $token): static
+    {
+        $this->claim = $token;
+
+        return $this;
+    }
+
+    /**
+     * The video's heartbeat, plus the claim's TTL: a prep that is working is a prep still owed, and
+     * the reaper reads the claim, not the heartbeat, for a prep that has not started yet.
+     */
+    private function heartbeat(Video $video): void
+    {
+        $this->beatVideo($video);
+
+        $now = microtime(true);
+
+        if ($this->lastClaimRefreshAt === null || $now - $this->lastClaimRefreshAt >= self::CLAIM_REFRESH_SECONDS) {
+            $this->lastClaimRefreshAt = $now;
+            PrepClaim::refresh($this->videoId, $this->claim);
+        }
+    }
 
     /**
      * This job runs on `orchestration`, which every worker drains — GPU or not — but it encodes
@@ -91,7 +140,8 @@ class PrepareVideoJob implements ShouldQueue
             return false;
         }
 
-        self::dispatch($this->videoId, $this->originalPath, $this->nodeHops + 1)
+        // The claim travels with it: the video is still owed this same prep, on another node.
+        dispatch((new self($this->videoId, $this->originalPath, $this->nodeHops + 1))->withClaim($this->claim))
             ->onQueue(self::QUEUE)
             ->delay(now()->addSeconds(self::NODE_HOP_DELAY));
 
@@ -110,14 +160,27 @@ class PrepareVideoJob implements ShouldQueue
 
     public function handle(CreateVideoStreamsService $streamsService, ChunkPlanner $planner): void
     {
-        $video = Video::find($this->videoId);
+        $this->startedAt = microtime(true);
+        $claimWait = $this->claimWaitSeconds();
 
-        if (! $video) {
+        // A job from a run that was failed and retried while it sat in the queue: the retry's own
+        // prep owns the video now, and two preps would race on its scratch and its batches.
+        if (! PrepClaim::holds($this->videoId, $this->claim)) {
+            Log::info('Preparation skipped: claim superseded', ['video' => $this->videoId]);
+
             return;
         }
 
-        // Redelivery guard: if an encode batch already exists, fan-out ran. Names are
-        // "encode video {id} {queue}"; the trailing space keeps id 12 from matching 123.
+        $video = Video::find($this->videoId);
+
+        if (! $video) {
+            PrepClaim::forget($this->videoId, $this->claim);
+
+            return;
+        }
+
+        // Redelivery guard: skip once every hardware queue holds a batch with jobs
+        // ({@see fanOutComplete}).
         //
         // Deliberately counts FINISHED batches too. A second fan-out re-encodes nothing (every
         // chunk job skips an uploaded chunk), but its then() would transition the video into
@@ -125,8 +188,9 @@ class PrepareVideoJob implements ShouldQueue
         // running — they share a gather directory and a sync target. So a retry does not get here
         // with the old rows in place: {@see \App\Services\VideoService::retry()} clears them, which
         // is also what stops a hand-rolled status flip from hanging silently.
-        if (DB::table('job_batches')->where('name', 'like', "encode video {$video->id} %")->exists()) {
+        if ($this->fanOutComplete($video)) {
             Log::info('Segments already planned; skipping redelivery', ['video' => $this->videoId]);
+            PrepClaim::forget($this->videoId, $this->claim);
 
             return;
         }
@@ -151,6 +215,7 @@ class PrepareVideoJob implements ShouldQueue
 
         if (! $claimed && ! Video::whereKey($video->id)->whereIn('status', Video::ACTIVE_STATUSES)->exists()) {
             Log::info('Preparation skipped: video no longer active', ['video' => $this->videoId]);
+            PrepClaim::forget($this->videoId, $this->claim);
 
             return;
         }
@@ -166,7 +231,27 @@ class PrepareVideoJob implements ShouldQueue
                 return;
             }
 
-            $this->ensureLocalSource($video, $mirrorPath, $localPath);
+            try {
+                $this->ensureLocalSource($video, $mirrorPath, $localPath);
+            } catch (StoreTransferException $e) {
+                // The provider cutting a download short is not the video's fault: wait it out
+                // rather than spend one of the two exceptions that fail it.
+                if ($e->disk !== 's3' || ! $this->job || $this->attempts() >= $this->tries) {
+                    throw $e;
+                }
+
+                PrimaryStore::markUnavailable($e->getMessage());
+
+                Log::warning('Primary store unavailable; preparation will run again', [
+                    'video' => $this->videoId,
+                    'attempt' => $this->attempts(),
+                    'error' => mb_substr($e->getMessage(), 0, 500),
+                ]);
+
+                $this->release(300 * $this->attempts());
+
+                return;
+            }
 
             // Probe + rendition/audio/subtitle streams run on the LOCAL file: mkvmerge needs it for
             // BCP-47 language tags, and ffprobe is faster off local disk than the HTTP mirror.
@@ -189,21 +274,68 @@ class PrepareVideoJob implements ShouldQueue
                 EncodeSidecarTracksJob::dispatch($video->id, $mirrorPath)->onQueue(self::QUEUE);
             }
 
-            $this->resolveRenditions($video, $localPath);
+            $timings = [];
 
+            $stepStartedAt = microtime(true);
+            $this->resolveRenditions($video, $localPath);
+            $timings['probe_s'] = round(microtime(true) - $stepStartedAt, 1);
+
+            $stepStartedAt = microtime(true);
             $windows = $this->planWindows($video, $localPath, $planner);
+            $timings['plan_s'] = round(microtime(true) - $stepStartedAt, 1);
 
             if (empty($windows)) {
                 throw new RuntimeException("Segment planner produced no windows for video {$this->videoId}");
             }
 
-            if ($this->fanOut($video, $windows, $mirrorPath)) {
-                Log::info('Preparation planned', ['video' => $this->videoId, 'chunks' => count($windows)]);
+            $stepStartedAt = microtime(true);
+            $fannedOut = $this->fanOut($video, $windows, $mirrorPath);
+            $timings['fanout_s'] = round(microtime(true) - $stepStartedAt, 1);
+
+            if ($fannedOut) {
+                $renditions = $video->streams()->where('type', 'video')->count();
+                $this->logPlanned($video, count($windows), count($windows) * $renditions, $timings, $claimWait);
             }
+
+            // Settled either way: fanned out, or the video went terminal meanwhile. Only here and
+            // on the other clean exits — a crash or a timeout keeps the claim, because the queue
+            // still owes this video a prep: its redelivery.
+            PrepClaim::forget($this->videoId, $this->claim);
         } finally {
             // Downstream jobs read the mirror, not this scratch file; drop it either way.
             @unlink($localPath);
         }
+    }
+
+    /**
+     * Where a preparation's time went. A prep is as long as the encode it feeds, so each part —
+     * waiting for a worker, probing, planning, pushing the jobs — is what tells a slow link from a
+     * busy node from a crowded queue.
+     *
+     * @param  array{probe_s: float, plan_s: float, fanout_s: float}  $timings
+     */
+    private function logPlanned(Video $video, int $windows, int $jobs, array $timings, ?int $claimWait): void
+    {
+        Log::info('Preparation planned', [
+            'video' => $video->id,
+            'chunks' => $windows,
+            'jobs' => $jobs,
+            'attempt' => $this->attempts(),
+            'claim_wait_s' => $claimWait,
+            ...$timings,
+        ]);
+    }
+
+    /**
+     * Seconds between the push and now, read as the attempt starts: how long the job waited for a
+     * worker. The payload's `createdAt` survives a release, so on a later attempt this spans every
+     * attempt before it; `attempt` says which one it is.
+     */
+    private function claimWaitSeconds(): ?int
+    {
+        $createdAt = $this->job?->payload()['createdAt'] ?? null;
+
+        return $createdAt === null ? null : max(0, now()->getTimestamp() - (int) $createdAt);
     }
 
     /**
@@ -219,14 +351,42 @@ class PrepareVideoJob implements ShouldQueue
 
         $video->update(['status' => VideoStatus::DOWNLOADING->value]);
 
-        if (Storage::disk('chunks')->exists($mirrorPath)) {
+        // exists() still decides: a mirror that cannot be read right now must fail the attempt as
+        // it always did, not pass for a missing one and send the copy back to primary S3. The size
+        // is only for the fetch log, which needs it to turn seconds into a link rate — video 17621
+        // spent two thirds of its 1800s budget on this copy, and nothing recorded it.
+        $from = Storage::disk('chunks')->exists($mirrorPath) ? 'mirror' : 's3';
+        $bytes = $from === 'mirror' ? $this->objectSize('chunks', $mirrorPath) : $this->objectSize('s3', $this->originalPath);
+        $startedAt = microtime(true);
+
+        Log::info('Source fetch started', ['video' => $this->videoId, 'from' => $from, 'bytes' => $bytes]);
+
+        if ($from === 'mirror') {
             $this->s5cmdCopy('chunks', $this->s3Uri('chunks', $mirrorPath), $localPath, $video, $this->timeout);
         } else {
             $this->s5cmdCopy('s3', $this->s3Uri('s3', $this->originalPath), $localPath, $video, $this->timeout);
             $this->s5cmdCopy('chunks', $localPath, $this->s3Uri('chunks', $mirrorPath), $video, $this->timeout);
         }
 
+        Log::info('Source fetched', [
+            'video' => $this->videoId,
+            'from' => $from,
+            'bytes' => $bytes,
+            's' => round(microtime(true) - $startedAt, 1),
+            'attempt' => $this->attempts(),
+        ]);
+
         $video->update(['status' => VideoStatus::RUNNING->value]);
+    }
+
+    /** The object's size for a log line, or null when the store cannot say. Never decides anything. */
+    private function objectSize(string $disk, string $key): ?int
+    {
+        try {
+            return Storage::disk($disk)->size($key);
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /**
@@ -241,11 +401,26 @@ class PrepareVideoJob implements ShouldQueue
         $duration = (float) $video->duration;
         $tick = fn () => $this->heartbeat($video);
 
-        foreach ($video->streams()->where('type', 'video')->get() as $stream) {
-            (new PerTitleCrfService($stream))->apply($localPath, $duration, $tick);
+        $streams = $video->streams()->where('type', 'video')->get();
+
+        foreach ($streams->values() as $index => $stream) {
+            (new PerTitleCrfService($stream))->apply($localPath, $duration, $tick, $this->probeBudget($streams->count() - $index));
             (new QualityBitrateProbe($stream))->measure($localPath, $duration, $tick);
             (new RenditionPreflight($stream))->assert($localPath, $duration, $tick);
         }
+    }
+
+    /**
+     * Seconds the next rendition's probe may take and still measure another anchor: an even share
+     * of what this attempt has left, once the steps that follow the probes are set aside. Derived
+     * from the clock rather than fixed, so an idle node and a short download buy a better answer
+     * and a slow one still leaves the job time to plan and fan out.
+     */
+    private function probeBudget(int $renditionsLeft): float
+    {
+        $left = $this->timeout - (microtime(true) - $this->startedAt) - self::AFTER_PROBES_RESERVE;
+
+        return $left / max(1, $renditionsLeft);
     }
 
     /**
@@ -308,6 +483,9 @@ class PrepareVideoJob implements ShouldQueue
             ->whereIn('status', Video::ACTIVE_STATUSES)
             ->update(['status' => VideoStatus::PENDING->value]);
 
+        // Back in the queue, nothing is owed to it until the dispatcher claims it again.
+        PrepClaim::forget($this->videoId, $this->claim);
+
         Log::info('Preparation deferred: no active worker for the template hardware', [
             'video' => $this->videoId,
             'missing' => $missing,
@@ -324,12 +502,63 @@ class PrepareVideoJob implements ShouldQueue
      *
      * @param  list<array{0:float,1:float}>  $windows
      */
+    /**
+     * Whether an earlier attempt finished the fan-out: every hardware queue the renditions route to
+     * holds a batch with jobs. A row alone proves nothing — `PendingBatch::dispatch()` commits it
+     * with total_jobs 0 before a single job is pushed, so a timeout in between (video 17621) leaves
+     * a row for a fan-out that never happened. Names are "encode video {id} {queue}".
+     */
+    private function fanOutComplete(Video $video): bool
+    {
+        $queues = $this->expectedQueues($video);
+
+        return $queues !== [] && array_diff($queues, $this->queuesWithJobs($video)) === [];
+    }
+
+    /** @return list<string> the hardware queues this video's renditions encode on */
+    private function expectedQueues(Video $video): array
+    {
+        return $video->streams()->where('type', 'video')->get()
+            ->map(fn (Stream $stream) => $stream->encodeQueue())
+            ->unique()->values()->all();
+    }
+
+    /** @return list<string> the queues that already hold a batch with jobs for this video */
+    private function queuesWithJobs(Video $video): array
+    {
+        $prefix = "encode video {$video->id} ";
+
+        return DB::table('job_batches')
+            ->where('name', 'like', "{$prefix}%")
+            ->where('total_jobs', '>', 0)
+            ->pluck('name')
+            ->map(fn (string $name) => substr($name, strlen($prefix)))
+            ->unique()->values()->all();
+    }
+
+    /**
+     * Remove this video's batch rows that hold no job: what a fan-out leaves when it dies between
+     * the framework committing the row and pushing the jobs. Attempts never overlap (retry_after
+     * outlasts the timeout), so an empty row here is always a dead attempt's, never a live one's.
+     */
+    private function dropEmptyBatches(Video $video): void
+    {
+        $prefix = "encode video {$video->id} ";
+        $empty = DB::table('job_batches')->where('name', 'like', "{$prefix}%")->where('total_jobs', 0)->get(['id', 'name']);
+
+        foreach ($empty as $row) {
+            Log::warning('Empty encode batch removed', ['video' => $video->id, 'queue' => substr($row->name, strlen($prefix))]);
+        }
+
+        DB::table('job_batches')->whereIn('id', $empty->pluck('id'))->delete();
+    }
+
     /** False when the video went terminal while this job was probing, so nothing was dispatched. */
     private function fanOut(Video $video, array $windows, string $mirrorPath): bool
     {
-        $streams = $video->streams()->where('type', 'video')->get();
+        $allStreams = $video->streams()->where('type', 'video')->get();
 
-        if ($streams->isEmpty()) {
+        if ($allStreams->isEmpty()) {
             throw new RuntimeException("No video rendition streams found for video {$this->videoId}");
         }
 
@@ -344,24 +573,48 @@ class PrepareVideoJob implements ShouldQueue
             return false;
         }
 
+        // A row the framework committed before the attempt that wrote it died (video 17621): it
+        // holds no job and never will, and left in place it would read as a queue already handled.
+        // Gone, a late job of that attempt reads its run as over and skips ({@see ProcessChunkJob}).
+        $this->dropEmptyBatches($video);
+
+        // Only the queues still missing a batch: a queue that already has one is encoding (or done)
+        // from the previous attempt, and a second batch there would package the video twice.
+        $done = $this->queuesWithJobs($video);
+        $expectedQueues = $allStreams->map(fn (Stream $stream) => $stream->encodeQueue())->unique()->values()->all();
+        $streams = $allStreams->reject(fn (Stream $stream) => in_array($stream->encodeQueue(), $done, true))->values();
+
+        if ($streams->isEmpty()) {
+            return true;
+        }
+
         $this->discardStaleChunks($video, $streams, $windows);
 
         $chunkCount = count($windows);
 
         // Authoritative window count: the packager asserts each rendition concatenated exactly this
-        // many chunks, so a prematurely-completed batch can't publish a short rendition.
-        $video->update(['chunk_count' => $chunkCount]);
+        // many chunks, so a prematurely-completed batch can't publish a short rendition. Left as the
+        // first attempt wrote it when a sibling queue is already encoding against it.
+        if ($done === []) {
+            $video->update(['chunk_count' => $chunkCount]);
+        }
 
         // A fresh attempt starts with a clean slate: nothing else ever clears these, so a retried
         // video would keep showing the error and the progress of the run that failed.
-        $video->streams()->whereNotNull('error_log')->update(['error_log' => null]);
+        $video->streams()->whereIn('id', $streams->pluck('id'))->whereNotNull('error_log')->update(['error_log' => null]);
 
         // Progress is tracked per Output as one field per (chunk × rendition it contains);
-        // seed each output's Redis hash so its percent is meaningful from the first tick.
+        // seed each output's Redis hash so its percent is meaningful from the first tick. HMSET
+        // writes only these fields, so a sibling queue's progress survives a partial fan-out.
         foreach ($video->outputs as $output) {
-            $output->update(['status' => VideoStatus::RUNNING->value]);
+            $videoStreamIds = $output->streams()->where('type', 'video')->pluck('streams.id')
+                ->intersect($streams->pluck('id'))->values()->all();
 
-            $videoStreamIds = $output->streams()->where('type', 'video')->pluck('streams.id')->all();
+            if ($videoStreamIds === []) {
+                continue;
+            }
+
+            $output->update(['status' => VideoStatus::RUNNING->value]);
             $output->seedChunkProgress($chunkCount, $videoStreamIds);
         }
 
@@ -382,17 +635,32 @@ class PrepareVideoJob implements ShouldQueue
             Bus::batch($jobs)
                 ->onQueue($queue)
                 ->name("encode video {$video->id} {$queue}")
-                ->then(function () use ($videoId) {
+                ->then(function () use ($videoId, $expectedQueues) {
                     // Every batch fires this, but only the last finisher passes the gate: the
                     // framework marks a batch finished BEFORE running then(), so whoever sees
                     // no unfinished sibling knows every chunk window is encoded.
-                    $stillEncoding = DB::table('job_batches')
+                    //
+                    // Self-contained on purpose (DB queries and primitives only): during a rolling
+                    // deploy an older worker may be the one that runs it.
+                    $rows = DB::table('job_batches')
                         ->where('name', 'like', "encode video {$videoId} %")
-                        ->whereNull('finished_at')
-                        ->exists();
+                        ->get(['name', 'total_jobs', 'finished_at', 'cancelled_at']);
 
-                    if ($stillEncoding) {
+                    if ($rows->contains(fn ($row) => $row->finished_at === null)) {
                         return;
+                    }
+
+                    // No unfinished row is not enough: a queue whose batch was never written (a
+                    // prep killed between two queues' fan-outs) or was cancelled has encoded
+                    // nothing, and packaging now would publish a video missing that rendition.
+                    foreach ($expectedQueues as $queue) {
+                        $encoded = $rows->contains(fn ($row) => $row->name === "encode video {$videoId} {$queue}"
+                            && $row->total_jobs > 0
+                            && $row->cancelled_at === null);
+
+                        if (! $encoded) {
+                            return;
+                        }
                     }
 
                     $video = Video::find($videoId);
@@ -458,6 +726,16 @@ class PrepareVideoJob implements ShouldQueue
 
     public function failed(Throwable $e): void
     {
+        // A job of a superseded run: out of attempts, it is failed at its pop without handle() ever
+        // checking the claim, and the video it would fail is a retry another prep now owns.
+        if (! PrepClaim::holds($this->videoId, $this->claim)) {
+            Log::info('Preparation failure ignored: claim superseded', ['video' => $this->videoId, 'error' => $e->getMessage()]);
+
+            return;
+        }
+
+        PrepClaim::forget($this->videoId, $this->claim);
+
         Video::find($this->videoId)?->markAsFailed("Preparation failed: {$e->getMessage()}");
     }
 }

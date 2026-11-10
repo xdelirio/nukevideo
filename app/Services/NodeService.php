@@ -119,6 +119,10 @@ class NodeService
             'NODE_TYPE' => "NODE_TYPE={$node->type->value}",
             'VIDEO_WORKER_TIMEOUT' => 'VIDEO_WORKER_TIMEOUT='.self::WORKER_TIMEOUT,
             'REDIS_QUEUE_RETRY_AFTER' => 'REDIS_QUEUE_RETRY_AFTER='.self::QUEUE_RETRY_AFTER,
+            // Unset, Laravel logs at `debug`, and a worker writes every ffmpeg command it runs:
+            // 409 of the 417 MB one node logged in nine days, each line carrying a presigned
+            // chunk-store URL. A node's own env can still ask for `debug` while chasing something.
+            'LOG_LEVEL' => 'LOG_LEVEL='.(config('app.debug') ? 'debug' : 'info'),
             'DOMAIN' => "DOMAIN={$node->hostname}",
             'VOD_BASE_URL' => "VOD_BASE_URL={$scheme}{$node->hostname}",
             'INTERNAL_API_URL' => 'INTERNAL_API_URL='.config('nuke.internal.url'),
@@ -522,7 +526,10 @@ class NodeService
             // holding the fleet's mirrored sources and chunks.
             'volumes' => [Node::containerPrefix().'_chunks:/data'],
             // $CHUNK_STORE_IP is resolved by worker.sh, on the node.
-            'raw' => ['-p "$CHUNK_STORE_IP:$CHUNK_STORE_PORT:9000"'],
+            // Last in line for the kernel's OOM killer. The store shares its host with a worker,
+            // and every node reads its sources and writes its chunks there: an ffmpeg killed costs
+            // one chunk, the store killed costs the fleet whatever it had in flight.
+            'raw' => ['-p "$CHUNK_STORE_IP:$CHUNK_STORE_PORT:9000"', '--oom-score-adj -900'],
             'command' => '/data',
         ];
 

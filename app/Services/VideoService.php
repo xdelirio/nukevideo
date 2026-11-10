@@ -192,22 +192,30 @@ class VideoService
      * the retry. And while the lock is held the retry's own pass is not even dispatched — the
      * framework drops a unique job it cannot lock — so a retry let through here would hang.
      */
-    private function sidecarPassRunning(Video $video): bool
+    public function sidecarPassRunning(Video $video): bool
     {
         return $this->holdsUniqueLock(new EncodeSidecarTracksJob($video->id, ''));
     }
 
+    /**
+     * Whether a package job for the video still holds its unique lock: from dispatch until it
+     * finishes, fails or the lock expires ({@see PackageVideoJob::$uniqueFor}). A queued or
+     * redelivered package job beats no heartbeat until it starts, so this is what tells the reaper
+     * the queue still owes the video its packaging.
+     */
+    public function packagingHoldsLock(Video $video): bool
+    {
+        return $this->holdsUniqueLock(new PackageVideoJob($video->id));
+    }
+
+    /**
+     * Read, never taken: acquiring the lock to test it — even for a second — would make a dispatch
+     * landing in that second find it held, and the framework silently drops a unique job it cannot
+     * lock.
+     */
     private function holdsUniqueLock(object $job): bool
     {
-        $lock = Cache::lock(UniqueLock::getKey($job), 1);
-
-        if (! $lock->get()) {
-            return true;
-        }
-
-        $lock->release();
-
-        return false;
+        return Cache::lock(UniqueLock::getKey($job))->isLocked();
     }
 
     /** Encode batches of this video that have not finished, i.e. jobs still on their way to it. */

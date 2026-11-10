@@ -9,6 +9,8 @@ use App\Models\Stream;
 use App\Models\Video;
 use App\Services\AddTrackService;
 use App\Services\NodeService;
+use App\Services\VideoService;
+use App\Support\PrepClaim;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -44,7 +46,7 @@ class ReapStuckVideos extends Command
      */
     private const STUCK_TRACK_MINUTES = 420;
 
-    public function handle(AddTrackService $tracks): int
+    public function handle(AddTrackService $tracks, VideoService $videos): int
     {
         $this->reapStuckTracks($tracks);
 
@@ -70,7 +72,7 @@ class ReapStuckVideos extends Command
         $waiting = 0;
 
         foreach ($stuck as $video) {
-            if ($this->isWaitingOnTheQueue($video)) {
+            if ($this->isWaitingOnTheQueue($video, $videos)) {
                 $waiting++;
                 $this->line("Video {$video->id} has queued work outstanding; leaving it alone.");
 
@@ -120,8 +122,16 @@ class ReapStuckVideos extends Command
      * The ceiling is the escape hatch: if the jobs are still pending long after any queue could
      * plausibly deliver them (a flushed Redis, a fleet that never came back), they are not coming.
      */
-    private function isWaitingOnTheQueue(Video $video): bool
+    private function isWaitingOnTheQueue(Video $video, VideoService $videos): bool
     {
+        // Work owed outside any batch, each bounded by its own expiry rather than the ceilings
+        // below: a claimed preparation still waiting for a worker or for its redelivery
+        // ({@see PrepClaim}, six hours), and a sidecar or package job holding its unique lock
+        // (three hours). None of them beats a heartbeat before it starts.
+        if (PrepClaim::pending($video->id) || $videos->sidecarPassRunning($video) || $videos->packagingHoldsLock($video)) {
+            return true;
+        }
+
         if ($video->last_heartbeat_at?->lt(now()->subMinutes(self::ABANDONED_MINUTES))) {
             return false;
         }
