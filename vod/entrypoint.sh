@@ -53,6 +53,16 @@ fi
 # and so does a tab opened directly on the link. An Origin of `null` (a sandboxed iframe, a file://
 # page) matches no line and is refused.
 #
+# Unless CDN Settings allows a null origin (VOD_ALLOW_NULL_ORIGIN=1), for an app that is a page on
+# file://: a webOS or Tizen app, a WebView. Its player's requests then pass, whether the Origin
+# reads `null` or `file://`, which is how a WebView allowed to read local files writes it; and so
+# do its images, which name no page at all (see $anonymous_asset_refused). The Referer is not
+# asked for a second opinion: a document with an opaque origin never sends one, and that is the
+# page on file:// and the sandboxed iframe alike. Which is the price: any website can send `null`
+# from a sandboxed iframe, so the list is left stopping only the sites that do not hide.
+# Anything but `1` leaves it off, so a typo cannot open the edge. With no list there is nothing to
+# exempt from, and the variable is not read.
+#
 # The edge's own host passes because a player may name the manifest it read as the Referer of the
 # segments. The trailing `(/[^|]*)?\|` is what stops `example.com.evil.example`, and a Referer that
 # merely mentions an allowed site in its path or query, from matching.
@@ -67,7 +77,12 @@ if [ -z "${VOD_ALLOWED_DOMAINS:-}" ]; then
 else
     {
         echo 'default 1;'
-        echo '"~^\|" $anonymous_refused;'
+        if [ "${VOD_ALLOW_NULL_ORIGIN:-}" = "1" ]; then
+            echo '"~^\|" $anonymous_asset_refused;'
+            echo '"~^(null|file://)\|" 0;'
+        else
+            echo '"~^\|" $anonymous_refused;'
+        fi
         echo '"~*^https?://([^/:|]+)(:[0-9]+)?(/[^|]*)?\|\1$" 0;'
         echo "$VOD_ALLOWED_DOMAINS" | tr ',' '\n' | while IFS= read -r domain; do
             if ! echo "$domain" | grep -qE '^(\*\.)?[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'; then

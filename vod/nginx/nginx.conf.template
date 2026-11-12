@@ -113,6 +113,17 @@ http {
         default       0;
     }
 
+    # The same request once CDN Settings allows a null origin, which is for an app that is a page on
+    # file:// (a webOS or Tizen app, a WebView); the entrypoint writes the line that names this
+    # map. Such a page's <img> carries no Origin and no Referer, and Chromium adds `Sec-Fetch-Site:
+    # cross-site`: exactly what $anonymous_refused refuses, because a foreign page hiding its
+    # Referer sends the same. So the assets are let through, and only them. They are the thumbnails
+    # and storyboards, already unsigned; playback keeps the rule above.
+    map $uri $anonymous_asset_refused {
+        "~^/[0-9A-Za-z]{26}/assets/"  0;
+        default                       $anonymous_refused;
+    }
+
     # Whether the page asking is on a site this edge may not serve. The lines are the operator's
     # list from CDN Settings, written by the entrypoint at boot; see there for what passes and why.
     # Read before the cache and the token, and never part of the cache key, so one cached copy of a

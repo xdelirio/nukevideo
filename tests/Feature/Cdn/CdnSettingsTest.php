@@ -118,8 +118,23 @@ describe('the read-only S3 key for the proxies', function () use ($selfHosted) {
     })->with(['accessKeyId', 'secretAccessKey']);
 });
 
-it('refuses a value that is not a boolean', function () use ($selfHosted) {
-    $this->patchJson('/api/cdn-settings', $selfHosted(['bindIp' => 'sometimes']))->assertStatus(422)->assertJsonValidationErrors('selfHosted.bindIp');
+it('refuses a value that is not a boolean', function (string $field) use ($selfHosted) {
+    $this->patchJson('/api/cdn-settings', $selfHosted([$field => 'sometimes']))->assertStatus(422)->assertJsonValidationErrors("selfHosted.{$field}");
+})->with(['bindIp', 'allowNullOrigin']);
+
+it('lets a null origin through only once told to, and reads it back', function () use ($selfHosted) {
+    $this->getJson('/api/cdn-settings')->assertJsonPath('data.selfHosted.allowNullOrigin', false);
+
+    $this->patchJson('/api/cdn-settings', $selfHosted(['allowNullOrigin' => true]))->assertOk()->assertJsonPath('data.selfHosted.allowNullOrigin', true);
+    expect(app(CdnSettings::class)->providers['self_hosted']['allow_null_origin'])->toBeTrue();
+
+    $this->patchJson('/api/cdn-settings', $selfHosted(['allowNullOrigin' => false]))->assertOk()->assertJsonPath('data.selfHosted.allowNullOrigin', false);
+});
+
+it('keeps the null origin setting when a save does not mention it', function () use ($selfHosted) {
+    $this->patchJson('/api/cdn-settings', $selfHosted(['allowNullOrigin' => true]))->assertOk();
+
+    $this->patchJson('/api/cdn-settings', $selfHosted())->assertOk()->assertJsonPath('data.selfHosted.allowNullOrigin', true);
 });
 
 it('stores the allowed domains lowercased and without repeats, and reads them back', function () use ($selfHosted) {

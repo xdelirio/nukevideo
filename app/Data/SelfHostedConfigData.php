@@ -22,5 +22,11 @@ class SelfHostedConfigData extends Data
         // See {@see AllowedDomains}.
         /** @var string[] */
         public array $allowedDomains = [],
+        // Whether the edges also serve a page whose Origin is `null`, which the list above would
+        // refuse: an app's page on file:// (a webOS or Tizen app, a WebView) has no other origin
+        // to send. Off by default because any website can send the same from a sandboxed iframe,
+        // so with it on the list only stops the sites that do not hide. Means nothing without a
+        // list, and is written into the edge's nginx at deploy like it.
+        public bool $allowNullOrigin = false,
     ) {}
 }

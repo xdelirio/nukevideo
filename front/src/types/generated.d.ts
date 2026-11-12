@@ -113,6 +113,7 @@ tokenName: string,
 tokenWindow: number,
 bindIp: boolean,
 allowedDomains: string[],
+allowNullOrigin: boolean,
 };
 export type ServiceStatusData = {
 name: string,

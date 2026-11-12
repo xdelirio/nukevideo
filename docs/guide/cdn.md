@@ -77,7 +77,25 @@ alike. Leave the list empty for no restriction.
 - **The exception is native HLS on iOS.** The system media player may fetch the stream without any
   of these headers, and those requests cannot be told apart from a native app. For iPhones,
   [IP binding](#ip-binding) is what stops a copied link.
-- A WebView page on `file://` sends `Origin: null` and is refused.
+- A page on `file://` sends `Origin: null` and is refused, unless you
+  [allow a null origin](#allow-a-null-origin).
+
+#### Allow a null origin
+
+A webOS or Tizen app, or a WebView loading local files, is a page on `file://`. It has no site to
+name, so its player sends `Origin: null` and the list refuses it. Turn on **Allow a null origin**
+in CDN Settings and redeploy the proxy nodes, and the edge serves two more kinds of request:
+
+- One whose `Origin` is `null`, or `file://` as some WebViews write it.
+- One for a thumbnail or a storyboard that names no page at all, which is what an `<img>` in such
+  an app sends. Playback and downloads keep the rule above.
+
+**This weakens the list.** `null` identifies nobody: any website sends it from a sandboxed
+iframe, with no `Referer` to tell it apart from your app. With the option on, the list stops a
+site that embeds your links plainly, not one that sets out to get around it. Turn
+[IP binding](#ip-binding) on with it and keep the token window short, so that a link minted for
+one viewer is of no use to another site's visitors. The option does nothing while the list is
+empty.
 
 **Choose self-hosted when** you want full control over delivery, keep traffic on your own infrastructure, need the built-in bandwidth analytics per node, or already run edge servers.
 
