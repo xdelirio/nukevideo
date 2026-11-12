@@ -36,6 +36,7 @@ class CdnSettingsController extends Controller
             'selfHosted.bindIp' => ['sometimes', 'boolean'],
             'selfHosted.allowedDomains' => ['sometimes', 'array', 'max:'.AllowedDomains::MAX],
             'selfHosted.allowedDomains.*' => ['string', 'regex:'.AllowedDomains::pattern()],
+            'selfHosted.allowNullOrigin' => ['sometimes', 'boolean'],
 
             'bunny' => [Rule::requiredIf($bunnyActive), 'array'],
             'bunny.host' => [Rule::requiredIf($bunnyActive), 'string'],
@@ -79,6 +80,7 @@ class CdnSettingsController extends Controller
                 // An empty list survives the filter below, which only drops null: it is how the
                 // restriction gets lifted.
                 'allowed_domains' => isset($validated['selfHosted']['allowedDomains']) ? AllowedDomains::normalize($validated['selfHosted']['allowedDomains']) : null,
+                'allow_null_origin' => isset($validated['selfHosted']['allowNullOrigin']) ? (bool) $validated['selfHosted']['allowNullOrigin'] : null,
             ], fn ($v) => $v !== null));
         }
 

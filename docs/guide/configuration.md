@@ -64,6 +64,7 @@ The segment cache normally needs no configuration: the node's deploy builds it f
 |----------|---------|---------|-------------|
 | `VOD_TOKEN_SECRET` | — | Proxy | Secret for signing and validating stream tokens |
 | `VOD_ALLOWED_DOMAINS` | empty | Proxy | Comma-separated sites whose pages the edge serves, from **Allowed domains**; empty allows any site. Changing it requires redeploying the proxy. See [Allowed domains](/guide/cdn#allowed-domains) |
+| `VOD_ALLOW_NULL_ORIGIN` | unset | Proxy | `1` while **Allow a null origin** is on, and absent otherwise: the edge then also serves a page whose `Origin` is `null`, such as a smart TV app. Only read with a list set; changing it requires redeploying the proxy. See [Allow a null origin](/guide/cdn#allow-a-null-origin) |
 | `VOD_TOKEN_NAME` | `__hdnea__` | Proxy | Query argument carrying the token. Lowercase, digits and `_` only; changing it requires redeploying the proxy, and links already signed with the old name stop validating |
 
 ## CDN
@@ -151,7 +152,7 @@ Nodes are configured from the panel, not from a file on the node. There are two 
 
 Both are layered over what the deploy sets itself: the values copied from the API host (see the tables above), `APP_ENV`, `APP_DEBUG`, `NODE_ACCEL`, `VIDEO_WORKER_TIMEOUT`, `REDIS_QUEUE_RETRY_AFTER`, `DOMAIN`, `VOD_BASE_URL`, `CHUNKS_S3_ENDPOINT` (workers only, from the [chunk store](/guide/nodes#chunk-store) address) and the CDN token settings. An override replaces any of those — a node that reaches Redis at another address sets its own `REDIS_HOST`, for instance — except the deploy-owned keys, which make a node part of *this* installation or must match across the fleet, and are dropped from both layers (with a warning in the log):
 
-`APP_KEY`, `APP_URL`, `API_UPSTREAM_HOST`, `NODE_ID`, `NODE_TYPE`, `INTERNAL_API_URL`, `INTERNAL_API_SECRET`, `WEBHOOK_SECRET`, `VOD_TOKEN_SECRET`, `VOD_TOKEN_NAME`, `VOD_ALLOWED_DOMAINS`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_BUCKET`, `AWS_ENDPOINT`, `VIDEO_WORKER_TIMEOUT`, `REDIS_QUEUE_RETRY_AFTER`.
+`APP_KEY`, `APP_URL`, `API_UPSTREAM_HOST`, `NODE_ID`, `NODE_TYPE`, `INTERNAL_API_URL`, `INTERNAL_API_SECRET`, `WEBHOOK_SECRET`, `VOD_TOKEN_SECRET`, `VOD_TOKEN_NAME`, `VOD_ALLOWED_DOMAINS`, `VOD_ALLOW_NULL_ORIGIN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_BUCKET`, `AWS_ENDPOINT`, `VIDEO_WORKER_TIMEOUT`, `REDIS_QUEUE_RETRY_AFTER`.
 
 Everything here is applied when the container is created, so a change takes effect on the node's next **redeploy**.
 

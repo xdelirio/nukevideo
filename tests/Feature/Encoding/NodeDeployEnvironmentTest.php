@@ -313,10 +313,11 @@ describe('what the edge container is given', function () {
     it('hands the edge every variable its entrypoint and nginx template read', function () use ($runArgs) {
         // The other side of naming them one by one: a variable added to the edge and forgotten in
         // the list would reach nginx empty, on the next deploy, with nothing else to say why.
-        // A list configured, because that variable is deploy-owned and absent without one.
+        // A list configured and a null origin allowed, because those two variables are deploy-owned
+        // and absent otherwise.
         CdnSettings::fake([
             'provider' => 'self_hosted',
-            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com']]],
+            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com'], 'allow_null_origin' => true]],
         ]);
 
         $sources = file_get_contents(base_path('vod/entrypoint.sh')).file_get_contents(base_path('vod/nginx/nginx.conf.template'));
@@ -457,6 +458,34 @@ describe('edge token settings', function () {
 
         expect($env)->toContain('VOD_ALLOWED_DOMAINS=example.com')
             ->and($env)->not->toContain('VOD_ALLOWED_DOMAINS=evil.example');
+    });
+
+    it('tells the edge to let a null origin through once the operator allowed it', function () {
+        CdnSettings::fake([
+            'provider' => 'self_hosted',
+            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com'], 'allow_null_origin' => true]],
+        ]);
+
+        $env = app(NodeService::class)->getEnvironmentVariables(
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
+        );
+
+        expect($env)->toContain('VOD_ALLOW_NULL_ORIGIN=1');
+    });
+
+    it('does not let a node override open the edge to a null origin', function () {
+        // Off in CDN Settings. Any website can send `Origin: null`, so one line in a node's env
+        // would undo most of the operator's list on that edge.
+        CdnSettings::fake([
+            'provider' => 'self_hosted',
+            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com']]],
+        ]);
+
+        $env = app(NodeService::class)->getEnvironmentVariables(
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'env' => 'VOD_ALLOW_NULL_ORIGIN=1'])
+        );
+
+        expect(implode("\n", $env))->not->toContain('VOD_ALLOW_NULL_ORIGIN');
     });
 });
 

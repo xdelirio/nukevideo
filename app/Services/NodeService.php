@@ -156,6 +156,8 @@ class NodeService
             'VOD_TOKEN_SECRET' => $cdn->tokenSecret,
             'VOD_TOKEN_NAME' => $cdn->tokenName,
             'VOD_ALLOWED_DOMAINS' => implode(',', AllowedDomains::forEdge($cdn->allowedDomains)),
+            // Absent rather than `0` while off: the entrypoint reads anything but `1` as off.
+            'VOD_ALLOW_NULL_ORIGIN' => $cdn->allowNullOrigin ? '1' : '',
         ];
         foreach ($cdnEnv as $key => $value) {
             if ($value !== '') {
@@ -203,6 +205,7 @@ class NodeService
         'VOD_TOKEN_NAME',
         // One line in a node's env would otherwise exempt that edge from the operator's list.
         'VOD_ALLOWED_DOMAINS',
+        'VOD_ALLOW_NULL_ORIGIN',
         'AWS_ACCESS_KEY_ID',
         'AWS_SECRET_ACCESS_KEY',
         'AWS_BUCKET',
@@ -232,6 +235,7 @@ class NodeService
         'VOD_TOKEN_SECRET',
         'VOD_TOKEN_NAME',
         'VOD_ALLOWED_DOMAINS',
+        'VOD_ALLOW_NULL_ORIGIN',
         'VOD_S3_TLS_VERIFY',
         'VOD_CACHE_MAX_SIZE',
         'VOD_CACHE_MIN_FREE',

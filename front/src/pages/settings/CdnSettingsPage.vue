@@ -214,6 +214,21 @@ onMounted(fetchSettings)
             </p>
             <p v-if="allowedDomainsError" class="text-sm text-destructive">{{ allowedDomainsError }}</p>
           </div>
+          <div class="grid gap-2">
+            <div class="flex items-center gap-3">
+              <Switch id="sh_allow_null_origin" v-model="form.selfHosted.allowNullOrigin" />
+              <Label for="sh_allow_null_origin">Allow a null origin</Label>
+            </div>
+            <p class="text-sm text-muted-foreground">
+              For apps that are a page on <code>file://</code>, such as webOS and Tizen apps or a
+              WebView: they send <code>Origin: null</code>, which the list above refuses. Any
+              website can send the same from a sandboxed iframe, so with this on the list only
+              stops sites that do not hide, and binding links to the viewer's IP is what protects
+              them. Has no effect without allowed domains, and like them only applies once the
+              proxy nodes are redeployed.
+            </p>
+            <p v-if="errors['selfHosted.allowNullOrigin']" class="text-sm text-destructive">{{ errors['selfHosted.allowNullOrigin'][0] }}</p>
+          </div>
           <p class="text-xs text-muted-foreground">
             The edge cache is not sized here: each proxy node caches into its own disk pool and
             sizes the cache to it when it starts.
