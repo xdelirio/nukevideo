@@ -219,6 +219,7 @@ thumbnailUrl: string,
 storyboardUrl: string,
 expiresAt: string,
 sources: App.Data.VodSourceData[],
+subtitles: App.Data.VodSubtitleData[],
 };
 export type VodSourceData = {
 url: string,
@@ -226,6 +227,14 @@ format: string,
 outputUlid: string,
 videoCodec: string | null,
 audioCodec: string | null,
+};
+export type VodSubtitleData = {
+url: string,
+streamUlid: string,
+language: string | null,
+name: string | null,
+forced: boolean,
+hearingImpaired: boolean,
 };
 namespace Analytics {
 export type AnalyticsCardData = {

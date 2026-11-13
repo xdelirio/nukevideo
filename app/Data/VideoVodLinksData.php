@@ -35,5 +35,13 @@ class VideoVodLinksData extends Data
          * @var VodSourceData[]
          */
         public array $sources,
+        /**
+         * Every subtitle track as a standalone WebVTT file, for players that take their text
+         * tracks one by one rather than from the manifest ({@see VodSubtitleData}). Empty when the
+         * video has none — never absent.
+         *
+         * @var VodSubtitleData[]
+         */
+        public array $subtitles,
     ) {}
 }

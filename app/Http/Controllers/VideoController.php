@@ -105,7 +105,8 @@ class VideoController extends Controller
     public function play(Request $request, PlayVideoData $data, string $ulid)
     {
         $video = $request->project()->videos()
-            ->with('outputs.streams')
+            // `streams` as well: subtitles hang off the video, not off an output.
+            ->with(['outputs.streams', 'streams'])
             ->where('ulid', $ulid)->firstOrFail();
 
         return response()->json([
@@ -132,7 +133,7 @@ class VideoController extends Controller
     public function playMany(Request $request, PlayVideosData $data)
     {
         $videos = $request->project()->videos()
-            ->with('outputs.streams')
+            ->with(['outputs.streams', 'streams'])
             ->whereIn('ulid', $data->videos)
             ->get();
 

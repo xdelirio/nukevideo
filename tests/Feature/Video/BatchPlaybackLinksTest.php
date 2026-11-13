@@ -14,6 +14,7 @@ use App\Data\Video\PlayVideosData;
 use App\Models\Node;
 use App\Models\Output;
 use App\Models\Project;
+use App\Models\Stream;
 use App\Models\User;
 use App\Models\Video;
 use App\Services\Cdn\TrackingRegistry;
@@ -90,6 +91,31 @@ function playOutput(
     return $output;
 }
 
+/**
+ * A subtitle as packaging leaves it: the standalone WebVTT filed in the download zone, with the
+ * `file_size` that records it is there. Not attached to any output — subtitles hang off the video.
+ *
+ * @param  array<string, mixed>  $attributes
+ */
+function playSubtitle(Video $video, string $language = 'en', array $attributes = []): Stream
+{
+    $stream = $video->streams()->create([
+        'path' => "{$video->ulid}/subtitle/pending.vtt",
+        'type' => 'subtitle',
+        'meta' => [],
+        'language' => $language,
+        'name' => strtoupper($language),
+        'file_size' => 2048,
+        'package_size' => 10,
+        ...$attributes,
+    ]);
+
+    // The file is named after the stream's own ULID, which only exists once the model has booted.
+    $stream->update(['path' => "{$video->ulid}/subtitle/{$stream->ulid}.vtt"]);
+
+    return $stream;
+}
+
 beforeEach(function () {
     Storage::fake('s3');
 
@@ -133,7 +159,7 @@ it('answers one flat source per output and format', function () {
 
     // The published contract, pinned: this is what `docs/api/videos.md` documents, and an
     // integrator reads a field that is not here as a field that does not exist.
-    expect(array_keys($data))->toBe(['videoUlid', 'thumbnailUrl', 'storyboardUrl', 'expiresAt', 'sources'])
+    expect(array_keys($data))->toBe(['videoUlid', 'thumbnailUrl', 'storyboardUrl', 'expiresAt', 'sources', 'subtitles'])
         ->and(array_keys($data['sources'][0]))
         ->toBe(['url', 'format', 'outputUlid', 'videoCodec', 'audioCodec']);
 });
@@ -273,8 +299,9 @@ it('does not query per output', function () {
     $this->postJson("/api/videos/{$video->ulid}/play")->assertOk();
     $log = collect(DB::getQueryLog())->pluck('query');
 
-    // The renditions come in one eager load, and the fleet is resolved once for the request.
-    expect($log->filter(fn ($q) => str_contains($q, '"streams"'))->count())->toBe(1)
+    // The renditions come in one eager load and the video's own tracks in a second — subtitles
+    // hang off the video, not off an output — and the fleet is resolved once for the request.
+    expect($log->filter(fn ($q) => str_contains($q, '"streams"'))->count())->toBe(2)
         ->and($log->filter(fn ($q) => str_contains($q, '"nodes"'))->count())->toBe(1);
 });
 
@@ -416,4 +443,86 @@ describe('many videos at once', function () {
         $this->postJson('/api/videos/play', ['videos' => [(string) Str::ulid()], 'expiresIn' => 10])
             ->assertStatus(422)->assertJsonValidationErrors('expiresIn');
     });
+});
+
+it('hands out every subtitle as a standalone signed vtt', function () {
+    $video = playVideo();
+    playOutput($video);
+    $english = playSubtitle($video, 'en');
+    $spanish = playSubtitle($video, 'es', ['forced' => true, 'meta' => ['hearing_impaired' => true]]);
+
+    $subtitles = $this->postJson("/api/videos/{$video->ulid}/play")->assertOk()->json('data.subtitles');
+
+    expect($subtitles)->toHaveCount(2)
+        ->and(array_keys($subtitles[0]))
+        ->toBe(['url', 'streamUlid', 'language', 'name', 'forced', 'hearingImpaired'])
+        ->and(array_column($subtitles, 'streamUlid'))->toBe([$english->ulid, $spanish->ulid])
+        ->and(array_column($subtitles, 'language'))->toBe(['en', 'es'])
+        ->and($subtitles[0]['forced'])->toBeFalse()
+        ->and($subtitles[0]['hearingImpaired'])->toBeFalse()
+        ->and($subtitles[1]['forced'])->toBeTrue()
+        ->and($subtitles[1]['hearingImpaired'])->toBeTrue();
+
+    // The plain file of the download zone, not the packager segment next to the manifest, and
+    // signed: a `<track>` cannot add a header, so the token has to be in the URL.
+    expect($subtitles[0]['url'])
+        ->toContain("edge.example.com/{$video->ulid}/download/subtitle/{$english->ulid}.vtt")
+        ->toContain('hmac=');
+
+    // One object each — a token that opened a sibling would be a directory token.
+    expect($subtitles[0]['url'])->not->toContain('*')
+        ->and($subtitles[0]['url'])->not->toBe($subtitles[1]['url']);
+});
+
+it('answers an empty subtitle list for a video that has none', function () {
+    $video = playVideo();
+    playOutput($video, audioLanguages: ['en']);
+
+    $this->postJson("/api/videos/{$video->ulid}/play")
+        ->assertOk()
+        ->assertJsonPath('data.subtitles', []);
+});
+
+it('leaves out a subtitle whose file is not in the download zone', function () {
+    $video = playVideo();
+    playOutput($video);
+    $ready = playSubtitle($video, 'en', ['status' => 'ready']);
+    playSubtitle($video, 'es', ['status' => 'processing', 'file_size' => null]);
+    playSubtitle($video, 'fr', ['status' => 'failed', 'file_size' => null]);
+
+    $subtitles = $this->postJson("/api/videos/{$video->ulid}/play")->assertOk()->json('data.subtitles');
+
+    expect(array_column($subtitles, 'streamUlid'))->toBe([$ready->ulid]);
+});
+
+it('carries each video\'s own subtitles in a batch mint', function () {
+    $first = playVideo();
+    playOutput($first);
+    $subtitle = playSubtitle($first);
+    $second = playVideo();
+    playOutput($second);
+
+    $data = $this->postJson('/api/videos/play', ['videos' => [$first->ulid, $second->ulid]])
+        ->assertOk()->json('data');
+
+    expect(array_column($data[0]['subtitles'], 'streamUlid'))->toBe([$subtitle->ulid])
+        ->and($data[1]['subtitles'])->toBe([]);
+});
+
+it('attributes the subtitle links to the tracking id and honours the asked lifetime', function () {
+    $video = playVideo();
+    playOutput($video);
+    playSubtitle($video);
+
+    $data = $this->postJson("/api/videos/{$video->ulid}/play", ['trackingId' => 'client-42', 'expiresIn' => 7200])
+        ->assertOk()->json('data');
+
+    parse_str((string) parse_url($data['subtitles'][0]['url'], PHP_URL_QUERY), $query);
+
+    expect(app(TrackingRegistry::class)->resolve(hash('sha256', $query['__hdnea__'])))->toBe('client-42');
+
+    // The same expiry as the manifests it accompanies: a track that died first would vanish from
+    // a session that is still playing.
+    preg_match('/exp=(\d+)/', $query['__hdnea__'], $expiry);
+    expect((int) $expiry[1])->toBe(Carbon\Carbon::parse($data['expiresAt'])->timestamp);
 });
