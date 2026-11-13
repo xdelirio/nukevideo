@@ -4,6 +4,7 @@ namespace App\Data\ExternalUser;
 
 use App\Data\RequestData;
 use App\Http\Controllers\Api\ExternalUserController;
+use App\Support\DateRange;
 
 /**
  * The date range a customer's summary reports usage over ({@see ExternalUserController::show()}).
@@ -20,8 +21,8 @@ class ExternalUserQueryData extends RequestData
     public static function rules(): array
     {
         return [
-            'from' => 'required|date_format:Y-m-d',
-            'to' => 'required|date_format:Y-m-d|after_or_equal:from',
+            'from' => DateRange::from(),
+            'to' => DateRange::to(),
         ];
     }
 }

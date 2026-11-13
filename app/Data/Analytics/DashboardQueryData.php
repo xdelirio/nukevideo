@@ -6,6 +6,7 @@ use App\Data\RequestData;
 use App\Enums\UsageMetric;
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Services\AnalyticsService;
+use App\Support\DateRange;
 use App\Support\TrackingId;
 use Illuminate\Validation\Rule;
 use Spatie\LaravelData\Attributes\MapInputName;
@@ -66,8 +67,8 @@ class DashboardQueryData extends RequestData
     public static function rules(): array
     {
         return [
-            'from' => 'required|date_format:Y-m-d',
-            'to' => 'required|date_format:Y-m-d',
+            'from' => DateRange::from(),
+            'to' => DateRange::to(),
             // Narrow the reads to one video and/or one tracking id. Both are matched against
             // columns written from CDN access logs, so they are bound parameters in the service,
             // never interpolated; the shapes below are what those columns can hold.

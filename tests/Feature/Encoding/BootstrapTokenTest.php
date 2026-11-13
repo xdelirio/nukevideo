@@ -76,3 +76,13 @@ it('offers bootstrap commands for worker nodes only', function () {
 
     $this->postJson("/api/nodes/{$proxy->id}/bootstrap-token")->assertStatus(422);
 });
+
+it('serves a bootstrap script for a worker only', function () {
+    // A proxy's script built here would carry no disk list, which the deploy reads as "format
+    // every spare disk". Nothing mints such a URL, and a hand-signed one gets nothing either.
+    $proxy = Node::create(['name' => 'edge-01', 'ip_address' => '10.0.0.30', 'hostname' => 'edge.example.com', 'type' => 'proxy']);
+
+    $url = URL::temporarySignedRoute('nodes.bootstrap', now()->addMinutes(5), ['node' => $proxy->id, 'nonce' => 'abc']);
+
+    $this->get($url)->assertNotFound();
+});

@@ -65,6 +65,69 @@ http {
         keepalive_timeout 15s;
     }
 
+    # ---- Master manifests are built by the API ----
+    #
+    # A master manifest (`{output}.mpd`, `{output}.m3u8`) is no longer the bucket's file as it
+    # is: the API builds it for the link it was requested with — a resolution cap, subtitles as
+    # plain WebVTT, whatever options the link's token names. Only the master: media playlists and
+    # segments are the same bytes for every viewer and keep coming from the bucket.
+    #
+    # The API, held open like the bucket is. Unused, and pointed at a port nothing listens on,
+    # when the entrypoint found no INTERNAL_API_URL.
+    upstream manifest_api {
+        zone manifest_api 64k;
+        # The ceiling on what this edge may ask of the API at once, whoever is asking. The API
+        # is a pool of PHP workers that also serves the panel and mints the links; past this the
+        # request is not queued but answered from the bucket (see the `:8081` server).
+        server ${MANIFEST_API_SERVER} ${MANIFEST_API_RESOLVE} max_conns=64;
+        keepalive 16;
+        keepalive_timeout 15s;
+    }
+
+    # The loopback hop that asks the API (the `:8081` server at the end of this file), pooled like
+    # the hop to the signing server.
+    upstream manifest_origin {
+        server 127.0.0.1:8081;
+        keepalive 16;
+    }
+
+    # `manifest_origin` for a master manifest when the API is configured, `edge_origin` otherwise
+    # — which is every request on an edge deployed without INTERNAL_API_URL, unchanged.
+    #
+    # The file name is spelled out — an output ULID, an optional legacy cap, the extension — and
+    # not "anything without a slash", for two reasons. It is the API route's own pattern, so
+    # nothing matches here that the API would refuse. And the name is copied, decoded, into the
+    # request line of the hop to the API: with `[^/]+` a name carrying an encoded CR LF wrote
+    # header lines of the viewer's choosing into that request, next to the secret.
+    map $uri $edge_upstream {
+        "~^/[0-9A-Za-z]{26}/play/[0-9A-Za-z]+(\.[0-9]+)?\.(mpd|m3u8)$"  ${MANIFEST_UPSTREAM};
+        default                                                         edge_origin;
+    }
+
+    # The key naming the options a link's manifests are built with, read out of its token like
+    # `limit` below (App\Services\Cdn\ManifestOptionsRegistry). Empty for a link that asked for the
+    # defaults. It passed the HMAC, so a viewer cannot pick another.
+    map $link_token $link_mo {
+        "~(^|~)mo=(?<m>[0-9a-f]{16})(~|$)"  $m;
+        default                             "";
+    }
+
+    # What sets one built copy of a master manifest apart from another: the options key. It is
+    # the whole difference — the API builds nothing viewer-specific into a manifest, and the token
+    # is written in after the cache, on the way out — so viewers who asked for the same thing
+    # share a cached copy and viewers who did not can never be handed each other's. Empty for
+    # everything else, which keeps every segment under the key it has always had.
+    map $edge_upstream $manifest_variant {
+        manifest_origin  "|$link_mo";
+        default          "";
+    }
+
+    # Who to count a master manifest's cache miss against (see `manifest_misses`).
+    map $edge_upstream $manifest_client {
+        manifest_origin  $remote_addr;
+        default          "";
+    }
+
     map $uri $video_ulid {
         "~^/(?<v>[0-9A-Za-z]{26})/"  $v;
         default                      -;
@@ -148,6 +211,20 @@ http {
     # a viewer cannot name a key of their own. The burst is a first visit to a page of cold images.
     limit_req_zone $http_x_edge_asset_client zone=asset_misses:10m rate=5r/s;
 
+    # The same idea for master manifests, which cost more per miss than an asset: a request to
+    # the API, and through it one to the bucket. Only misses are counted — a manifest somebody
+    # already asked for with the same options comes out of the cache — so this is the rate at
+    # which one address can make the API work, not the rate at which it can start playbacks.
+    # Looser than the assets' because the address may be a carrier's NAT with a city behind it —
+    # and going over it refuses nobody: the manifest then comes from the bucket (see the `:8081`
+    # server), so the limit protects the API without costing a viewer their playback.
+    #
+    # The second zone bounds how many of those one address may have in flight. A rate alone does
+    # not: a hundred slow requests opened together sit inside any burst, and each one holds a PHP
+    # worker for as long as the API takes.
+    limit_req_zone $http_x_edge_asset_client zone=manifest_misses:10m rate=20r/s;
+    limit_conn_zone $http_x_edge_asset_client zone=manifest_inflight:10m;
+
     log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
                       '$status $body_bytes_sent "$http_referer" '
                       '"$http_user_agent" "$http_x_forwarded_for"';
@@ -159,6 +236,14 @@ http {
     # against. Vector hashes it before it leaves the node; nothing downstream sees the token
     # itself. Quoted because it is empty on the unsigned assets, and an empty unquoted value makes
     # the key-value parser swallow the next pair as its value.
+    # A response that delivered content: the whole object or a range of it. Everything else — a
+    # refusal, an error, a preflight's 204, a 304 with no body — is not usage (see `access_log`).
+    map $status $billable {
+        200      1;
+        206      1;
+        default  0;
+    }
+
     log_format  bandwidth  'ip=$remote_addr bytes=$body_bytes_sent video=$video_ulid zone=$video_zone cache=$cache_status origin=$upstream_bytes_received node=${NODE_ID} token="$link_token"';
 
     access_log off;
@@ -214,7 +299,14 @@ http {
         # worker whenever the log driver falls behind. 4k and no more: stdout is a pipe shared by
         # every worker, and only a write up to PIPE_BUF is atomic, so a larger buffer could
         # interleave lines from two workers and cost Vector both. A crash loses a second of lines.
-        access_log /dev/stdout bandwidth buffer=4k flush=1s;
+        #
+        # Only what was actually delivered ($billable). The line books its bytes to the video named
+        # in the PATH, and the path is the one thing a request needs no token to choose: a refused
+        # request (403), a missing object (404), a limit hit (429) each have a body of a hundred-odd
+        # bytes, which used to be booked as streaming on whichever video the URL named — anyone
+        # could add requests, bytes and their own address to another tenant's figures, or grow the
+        # usage table one made-up ULID at a time.
+        access_log /dev/stdout bandwidth buffer=4k flush=1s if=$billable;
 
         # Delivery only reads. The hop below signs whatever it forwards with the bucket's
         # credentials, method included, so any other method would reach S3 as an authorised request.
@@ -400,7 +492,9 @@ http {
             # fetches on its own and caches nothing. `revalidate` turns the refetch of a segment
             # whose 30 days ran out into a 304.
             proxy_cache vod_cache;
-            proxy_cache_key "$uri";
+            # A master manifest adds the key of the options it was built with ($manifest_variant);
+            # everything else is keyed on the path alone, as before.
+            proxy_cache_key "$uri$manifest_variant";
             # A miss is written to the pool as it arrives; 4 KB buffers made that thousands of
             # small writes for one segment.
             proxy_buffer_size 64k;
@@ -414,7 +508,7 @@ http {
             # viewers: an unrelated viewer's segment would wait on S3, for up to a proxy timeout
             # when S3 hangs. Without it one viewer waits for the refresh and `updating` serves the rest.
             proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
-            proxy_set_header X-Edge-Asset-Client "";
+            proxy_set_header X-Edge-Asset-Client $manifest_client;
             proxy_cache_lock on;
             proxy_cache_lock_timeout 30s;
             proxy_cache_lock_age 30s;
@@ -434,7 +528,12 @@ http {
             add_header Access-Control-Allow-Origin "*" always;
             add_header Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges" always;
 
-            proxy_pass http://edge_origin;
+            # The link's token, for the API to read the options key out of. It was stripped from
+            # the query above, so this header is the only way it travels on. Sent on every request
+            # because `proxy_set_header` cannot be conditional; the bucket hop drops it.
+            proxy_set_header X-Link-Token $link_token;
+
+            proxy_pass http://$edge_upstream;
             proxy_http_version 1.1;
             proxy_set_header Connection "";
         }
@@ -494,9 +593,134 @@ http {
             # a bucket that varies its response on it would defeat the single cached copy.
             proxy_set_header Origin "";
             proxy_set_header X-Edge-Asset-Client "";
+            # The viewer's token is for the manifest API, and none of the bucket's business.
+            proxy_set_header X-Link-Token "";
             proxy_set_header X-Amz-Date $aws_auth_date;
             proxy_set_header X-Amz-Content-SHA256 UNSIGNED-PAYLOAD;
             proxy_set_header Authorization $aws_token;
+        }
+    }
+
+    # The hop to the manifest API (see `manifest_origin`): ask the API for the manifest, and hand
+    # over the bucket's own copy whenever it does not answer with one.
+    #
+    # That fallback is the point of this server. The API is a web application behind a network;
+    # the bucket's manifest is always there and always plays. So anything but a manifest from the
+    # API — an error, a timeout, a redirect, a refusal — ends in the packaged manifest instead of
+    # a failed playback start. That is right while what the API adds is a preference (a cap, a
+    # subtitle format). A restriction would have to fail closed, and this is the place to change.
+    #
+    # Either answer is cached by the outer server, under the link's options key: the API's for 30
+    # seconds, the bucket's for 10. So a slow or absent API costs one viewer per manifest its
+    # timeout, not every viewer, and a manifest already cached keeps being served stale if the
+    # API and the bucket both fail.
+    server {
+        listen 127.0.0.1:8081;
+
+        access_log off;
+        keepalive_requests 100000;
+        # As on the signing server: the outer rewrites the body, and cannot rewrite a compressed one.
+        gzip off;
+
+        # The same pattern as the map that routes here, captured: nothing reaches the request
+        # line below that is not a ULID and a plain file name.
+        location ~ "^/([0-9A-Za-z]{26})/play/([0-9A-Za-z]+(?:\.[0-9]+)?\.(?:mpd|m3u8))$" {
+            # Over either limit is a 429 that `error_page` below turns into the bucket's copy.
+            limit_req zone=manifest_misses burst=400 nodelay;
+            limit_req_status 429;
+            limit_req_log_level notice;
+            limit_conn manifest_inflight 10;
+            limit_conn_status 429;
+            limit_conn_log_level notice;
+
+            # Short, because a viewer is waiting on a file of a few kilobytes and there is a
+            # fallback: past these the bucket answers instead.
+            proxy_connect_timeout 2s;
+            proxy_send_timeout 5s;
+            proxy_read_timeout 5s;
+            # A manifest is tens of kilobytes at most; the default 4k buffers spooled it to disk.
+            proxy_buffer_size 64k;
+            proxy_buffers 16 64k;
+
+            # Anything but a manifest goes to the bucket. The errors nginx raises itself come
+            # through here too: a refused or timed-out connection (502, 504), the API's
+            # connection ceiling reached (502), a limit above exceeded (429).
+            proxy_intercept_errors on;
+            error_page 301 302 303 307 308 400 401 403 404 405 408 419 429 500 502 503 504 = @bucket;
+
+            # No query: the token was stripped by the validator and travels as a header, and with
+            # variables in it nginx sends this URI exactly as written.
+            proxy_pass ${MANIFEST_API_SCHEME}://manifest_api${MANIFEST_API_PATH}/manifests/$1/$2;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_ssl_server_name on;
+            proxy_ssl_name ${MANIFEST_API_NAME};
+            # Always verified: the secret below goes out on this connection. Vector already
+            # holds the same URL to the same standard.
+            proxy_ssl_verify on;
+            proxy_ssl_verify_depth 4;
+            proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+            proxy_set_header Host ${MANIFEST_API_HOST};
+            proxy_set_header Authorization "Bearer ${INTERNAL_API_SECRET}";
+            proxy_set_header X-Link-Token $http_x_link_token;
+            # Uncompressed, for `secure_token` on the outer server.
+            proxy_set_header Accept-Encoding "";
+            # Nothing else of the viewer's request is the API's business: it trusts its proxies,
+            # and these would have been taken as the address and host it was reached on.
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header Origin "";
+            proxy_set_header Referer "";
+            proxy_set_header Cookie "";
+            proxy_set_header X-Forwarded-For "";
+            proxy_set_header X-Forwarded-Host "";
+            proxy_set_header X-Forwarded-Proto "";
+            proxy_set_header X-Forwarded-Port "";
+            proxy_set_header X-Edge-Asset-Client "";
+
+            # The API answers like the web application it is: frame, sniffing and referrer
+            # policies, HSTS for its own host, a Vary for its own CORS, its rate-limit counters.
+            # None of it describes a manifest served from this host, and HSTS in particular would
+            # pin the CDN's whole domain to https on the API's say-so. Caching and CORS are the
+            # outer server's.
+            proxy_hide_header Vary;
+            proxy_hide_header Cache-Control;
+            proxy_hide_header Set-Cookie;
+            proxy_hide_header Strict-Transport-Security;
+            proxy_hide_header X-Frame-Options;
+            proxy_hide_header X-Content-Type-Options;
+            proxy_hide_header Referrer-Policy;
+            proxy_hide_header X-Powered-By;
+            proxy_hide_header X-RateLimit-Limit;
+            proxy_hide_header X-RateLimit-Remaining;
+
+            # How long the outer server may keep it — what the signing server says of a manifest.
+            add_header X-Accel-Expires 30;
+            # Which of the two answered, for whoever is working out why a link ignores its options.
+            add_header X-Manifest-Source api;
+        }
+
+        # The packaged manifest, through the signing server: the request as it arrived, same path.
+        location @bucket {
+            proxy_pass http://edge_origin;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_buffer_size 64k;
+            proxy_buffers 16 64k;
+            # Already counted on the way in; the signing server would count it a second time.
+            proxy_set_header X-Edge-Asset-Client "";
+
+            # Kept for less time than the API's answer: this is the copy without the link's
+            # options, so it should give way to the real one soon after the API is back, while
+            # still sparing the viewers of an outage its timeout. (The signing server's own
+            # X-Accel-Expires stops at this hop. On an error the header is not sent, and the
+            # outer server applies its own rules.)
+            add_header X-Accel-Expires 10;
+            add_header X-Manifest-Source bucket;
+        }
+
+        location / {
+            return 404;
         }
     }
 }

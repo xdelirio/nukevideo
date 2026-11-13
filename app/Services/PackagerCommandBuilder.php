@@ -141,7 +141,7 @@ class PackagerCommandBuilder
         ];
 
         if ($input['type'] === 'audio') {
-            $parts[] = "lang={$input['language']}";
+            $parts[] = 'lang='.self::descriptorLanguage($input['language'] ?? null);
 
             $label = self::descriptorLabel($input['name']);
             $parts[] = "dash_label={$label}";
@@ -254,7 +254,7 @@ class PackagerCommandBuilder
             $parts[] = 'hls_name='.self::descriptorLabel($input['name']);
         }
 
-        $parts[] = "lang={$input['language']}";
+        $parts[] = 'lang='.self::descriptorLanguage($input['language'] ?? null);
 
         // A forced track already implies its own role; SDH takes `caption` instead of `subtitle`.
         if (! empty($input['forced'])) {
@@ -285,5 +285,24 @@ class PackagerCommandBuilder
     private static function descriptorLabel(?string $name): string
     {
         return trim((string) preg_replace('/["\r\n,]+/u', ' ', (string) $name));
+    }
+
+    /**
+     * What a language tag looks like (BCP 47, loosely): a 2-3 letter primary subtag and any number
+     * of 2-8 character ones after it. Shared with the ingest and the same as the edit endpoint's
+     * rule. `\z`, not `$`: PCRE's `$` also matches before a trailing newline.
+     */
+    public const LANGUAGE_PATTERN = '/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*\z/';
+
+    /**
+     * Last gate before a language reaches the packager, for the reason {@see descriptorLabel}
+     * exists: a comma in it ends the descriptor field and starts another — `init_segment`,
+     * `segment_template`, `in` — and a quote or newline breaks the `LANGUAGE="…"` attribute of the
+     * master. Unlike a name it is not repaired: a tag that is not a language tag is no language,
+     * and the track goes out with an empty `lang=`, which shaka accepts.
+     */
+    private static function descriptorLanguage(?string $language): string
+    {
+        return preg_match(self::LANGUAGE_PATTERN, (string) $language) ? (string) $language : '';
     }
 }

@@ -58,9 +58,9 @@ class ChunkPlanner
      * result. The probe is parsed once and feeds both the cut and the measurement of what the
      * source would allow, because the second is only free while the first is being done.
      */
-    public function plan(Video $video, string $probeOutput, float $containerDuration): ChunkPlan
+    public function plan(Video $video, string $probeOutput, float $containerDuration, float $startTime = 0.0): ChunkPlan
     {
-        [$keyTimes, $lastPacket] = $this->readPackets($probeOutput);
+        [$keyTimes, $lastPacket] = $this->readPackets($probeOutput, $startTime);
 
         $ideal = $this->idealFor($video);
         $target = (int) max(self::MIN_WINDOW, min(self::MAX_WINDOW, round($ideal)));
@@ -178,19 +178,27 @@ class ChunkPlanner
      *
      * @return list<array{0:float,1:float}> ordered [start, end] windows in seconds
      */
-    public function windowsFromPackets(string $probeOutput, float $containerDuration, int $chunkSeconds): array
+    public function windowsFromPackets(string $probeOutput, float $containerDuration, int $chunkSeconds, float $startTime = 0.0): array
     {
-        [$keyTimes, $lastPacket] = $this->readPackets($probeOutput);
+        [$keyTimes, $lastPacket] = $this->readPackets($probeOutput, $startTime);
 
         return $this->groupKeyframes($keyTimes, $this->pictureEnd($lastPacket, $containerDuration), $chunkSeconds);
     }
 
     /**
-     * Sorted keyframe timestamps and the highest packet time seen.
+     * Sorted keyframe timestamps and the highest packet time seen, both counted from the START of
+     * the file — which is how the duration they are compared against is counted, and how the
+     * `-ss`/`-to` the windows become are read.
+     *
+     * ffprobe's packet times are not: they are the container's own timestamps, which start
+     * wherever the container says ({@see MediaSource::startTime}). A broadcast or HLS-captured
+     * MPEG-TS routinely starts hours in, so every keyframe sat past the end of the "duration" and
+     * the whole video came out as one window — encoded as a single chunk, until it hit the
+     * per-chunk timeout.
      *
      * @return array{0:list<float>,1:float}
      */
-    private function readPackets(string $probeOutput): array
+    private function readPackets(string $probeOutput, float $startTime = 0.0): array
     {
         $keyTimes = [];
         $lastPacket = 0.0;
@@ -203,11 +211,15 @@ class ChunkPlanner
                 continue;
             }
 
+            // A packet may sit a hair before the container's start (B-frame reordering at the
+            // head); it is the first frame either way.
+            $time = max(0.0, (float) $time - $startTime);
+
             // B-frames put packets out of order, so the tail is the max, not the last line.
-            $lastPacket = max($lastPacket, (float) $time);
+            $lastPacket = max($lastPacket, $time);
 
             if (str_contains($flags, 'K')) {
-                $keyTimes[] = (float) $time;
+                $keyTimes[] = $time;
             }
         }
 

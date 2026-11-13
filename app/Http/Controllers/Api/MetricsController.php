@@ -61,7 +61,7 @@ class MetricsController extends Controller
                 'video_ulid' => $data->list('videos'),
             ],
             $data->list('metrics'),
-            $this->accountScope($request->user(), $data),
+            $this->accountScope($request->user(), $data, $projectId !== null),
             $projectId,
             $data->measures(),
         );
@@ -139,10 +139,21 @@ class MetricsController extends Controller
      * are not: `external_user_id` IS the integrator's own customer identifier, and reporting it
      * across accounts hands one tenant another's customers. Null otherwise, which leaves delivered
      * bytes as wide as the project scope alongside makes them.
+     *
+     * And pinned whenever an unscoped query names videos or viewer labels. Naming them is what
+     * {@see assertDimensionsAllowed} accepts in place of a project, on the reasoning that a caller
+     * can only name what is its own — which is false: a video's ULID is in every playback URL it
+     * was ever given, and a tracking id is free text another tenant also uses. Unpinned, a list of
+     * somebody else's ULIDs broken down by `ip` answered with that tenant's viewers' addresses.
+     * With the account on the query, a name that is not the caller's simply matches nothing.
      */
-    private function accountScope(Model $caller, MetricsQueryData $data): ?int
+    private function accountScope(Model $caller, MetricsQueryData $data, bool $scoped): ?int
     {
-        $touchesAccountData = $data->has(MetricDimension::EXTERNAL_USER_ID)
+        $namesWithoutProject = ! $scoped
+            && ($data->list('videos') !== [] || $data->list('trackingIds') !== []);
+
+        $touchesAccountData = $namesWithoutProject
+            || $data->has(MetricDimension::EXTERNAL_USER_ID)
             || $data->list('externalUserIds') !== []
             || array_diff($data->list('metrics'), UsageMetric::delivery()) !== [];
 

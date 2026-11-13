@@ -3,9 +3,9 @@
 namespace App\Data\Video;
 
 use App\Data\RequestData;
+use App\Enums\SubtitleFormat;
 use App\Models\Output;
-use App\Services\Cdn\BunnyProvider;
-use App\Services\Cdn\SelfHostedProvider;
+use App\Services\Cdn\EdgeLinkSigner;
 use App\Services\Cdn\TrackingRegistry;
 use App\Support\LinkExpiry;
 use App\Support\SpeedLimit;
@@ -34,11 +34,10 @@ class PlayVideoData extends RequestData
         #[Min(144), Max(4320)]
         public ?int $resolution = null,
         /**
-         * The address that will fetch the manifests, when minting from your own backend. Bunny
-         * leaves it out of the signature ({@see BunnyProvider}). The self-hosted edge signs it into
-         * the token only when the operator turns on `bindIp`, and the edge then refuses the link
-         * from any other address ({@see SelfHostedProvider::sign}) — so with that on, a wrong
-         * address is a link that never plays.
+         * The address that will fetch the manifests, when minting from your own backend. It is
+         * signed into the token only when the operator turns on `bindIp`, and the edge then
+         * refuses the link from any other address ({@see EdgeLinkSigner::sign}) — so with that
+         * on, a wrong address is a link that never plays.
          */
         #[IP]
         public ?string $ip = null,
@@ -67,6 +66,14 @@ class PlayVideoData extends RequestData
          */
         #[MapInputName(CamelCaseMapper::class)]
         public ?int $expiresIn = null,
+        /**
+         * How the DASH manifests of this answer carry their subtitles ({@see SubtitleFormat}).
+         * Omitted is `vtt`: each text track points at one plain `.vtt` file. `segments` asks for
+         * the packaged fragmented-MP4 form instead. Never part of a URL: it is filed under the
+         * links' tokens and applied when a manifest is requested.
+         */
+        #[MapInputName(CamelCaseMapper::class)]
+        public ?SubtitleFormat $subtitlesFormat = null,
     ) {}
 
     /**

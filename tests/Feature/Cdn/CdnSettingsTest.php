@@ -15,33 +15,30 @@ use Laravel\Sanctum\Sanctum;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    CdnSettings::fake([
-        'provider' => 'self_hosted',
-        'providers' => ['self_hosted' => ['token_secret' => 'secret', 'token_window' => 3600], 'bunny' => []],
-    ]);
+    CdnSettings::fake(['token_secret' => 'secret', 'token_window' => 3600]);
     Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
 });
 
-$selfHosted = fn (array $extra = []) => ['provider' => 'self_hosted', 'selfHosted' => ['tokenName' => '__hdnea__', 'tokenWindow' => 3600, ...$extra]];
+$settings = fn (array $extra = []) => ['tokenName' => '__hdnea__', 'tokenWindow' => 3600, ...$extra];
 
-it('turns address binding on and off, and reads it back', function () use ($selfHosted) {
-    $this->getJson('/api/cdn-settings')->assertJsonPath('data.selfHosted.bindIp', false);
+it('turns address binding on and off, and reads it back', function () use ($settings) {
+    $this->getJson('/api/cdn-settings')->assertJsonPath('data.bindIp', false);
 
-    $this->patchJson('/api/cdn-settings', $selfHosted(['bindIp' => true]))->assertOk()->assertJsonPath('data.selfHosted.bindIp', true);
-    expect(app(CdnSettings::class)->providers['self_hosted']['bind_ip'])->toBeTrue();
+    $this->patchJson('/api/cdn-settings', $settings(['bindIp' => true]))->assertOk()->assertJsonPath('data.bindIp', true);
+    expect(app(CdnSettings::class)->bind_ip)->toBeTrue();
 
-    $this->patchJson('/api/cdn-settings', $selfHosted(['bindIp' => false]))->assertOk()->assertJsonPath('data.selfHosted.bindIp', false);
+    $this->patchJson('/api/cdn-settings', $settings(['bindIp' => false]))->assertOk()->assertJsonPath('data.bindIp', false);
 });
 
-it('keeps the binding when a save does not mention it', function () use ($selfHosted) {
-    $this->patchJson('/api/cdn-settings', $selfHosted(['bindIp' => true]))->assertOk();
+it('keeps the binding when a save does not mention it', function () use ($settings) {
+    $this->patchJson('/api/cdn-settings', $settings(['bindIp' => true]))->assertOk();
 
     // An older panel, or a script, saving the other fields must not switch it off behind the operator.
-    $this->patchJson('/api/cdn-settings', $selfHosted())->assertOk()->assertJsonPath('data.selfHosted.bindIp', true);
+    $this->patchJson('/api/cdn-settings', $settings())->assertOk()->assertJsonPath('data.bindIp', true);
 });
 
-describe('the read-only S3 key for the proxies', function () use ($selfHosted) {
-    $withKey = fn (array $edgeS3) => [...$selfHosted(), 'edgeS3' => $edgeS3];
+describe('the read-only S3 key for the proxies', function () use ($settings) {
+    $withKey = fn (array $edgeS3) => [...$settings(), 'edgeS3' => $edgeS3];
 
     it('starts empty', function () {
         $this->getJson('/api/cdn-settings')
@@ -71,10 +68,10 @@ describe('the read-only S3 key for the proxies', function () use ($selfHosted) {
         'empty' => [['accessKeyId' => 'edge-key', 'secretAccessKey' => '']],
     ]);
 
-    it('leaves the pair alone when a save does not mention it', function () use ($withKey, $selfHosted) {
+    it('leaves the pair alone when a save does not mention it', function () use ($withKey, $settings) {
         $this->patchJson('/api/cdn-settings', $withKey(['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge-secret']))->assertOk();
 
-        $this->patchJson('/api/cdn-settings', $selfHosted())->assertOk()->assertJsonPath('data.edgeS3.accessKeyId', 'edge-key');
+        $this->patchJson('/api/cdn-settings', $settings())->assertOk()->assertJsonPath('data.edgeS3.accessKeyId', 'edge-key');
     });
 
     it('clears the pair when the key is emptied', function () use ($withKey) {
@@ -118,47 +115,47 @@ describe('the read-only S3 key for the proxies', function () use ($selfHosted) {
     })->with(['accessKeyId', 'secretAccessKey']);
 });
 
-it('refuses a value that is not a boolean', function (string $field) use ($selfHosted) {
-    $this->patchJson('/api/cdn-settings', $selfHosted([$field => 'sometimes']))->assertStatus(422)->assertJsonValidationErrors("selfHosted.{$field}");
+it('refuses a value that is not a boolean', function (string $field) use ($settings) {
+    $this->patchJson('/api/cdn-settings', $settings([$field => 'sometimes']))->assertStatus(422)->assertJsonValidationErrors($field);
 })->with(['bindIp', 'allowNullOrigin']);
 
-it('lets a null origin through only once told to, and reads it back', function () use ($selfHosted) {
-    $this->getJson('/api/cdn-settings')->assertJsonPath('data.selfHosted.allowNullOrigin', false);
+it('lets a null origin through only once told to, and reads it back', function () use ($settings) {
+    $this->getJson('/api/cdn-settings')->assertJsonPath('data.allowNullOrigin', false);
 
-    $this->patchJson('/api/cdn-settings', $selfHosted(['allowNullOrigin' => true]))->assertOk()->assertJsonPath('data.selfHosted.allowNullOrigin', true);
-    expect(app(CdnSettings::class)->providers['self_hosted']['allow_null_origin'])->toBeTrue();
+    $this->patchJson('/api/cdn-settings', $settings(['allowNullOrigin' => true]))->assertOk()->assertJsonPath('data.allowNullOrigin', true);
+    expect(app(CdnSettings::class)->allow_null_origin)->toBeTrue();
 
-    $this->patchJson('/api/cdn-settings', $selfHosted(['allowNullOrigin' => false]))->assertOk()->assertJsonPath('data.selfHosted.allowNullOrigin', false);
+    $this->patchJson('/api/cdn-settings', $settings(['allowNullOrigin' => false]))->assertOk()->assertJsonPath('data.allowNullOrigin', false);
 });
 
-it('keeps the null origin setting when a save does not mention it', function () use ($selfHosted) {
-    $this->patchJson('/api/cdn-settings', $selfHosted(['allowNullOrigin' => true]))->assertOk();
+it('keeps the null origin setting when a save does not mention it', function () use ($settings) {
+    $this->patchJson('/api/cdn-settings', $settings(['allowNullOrigin' => true]))->assertOk();
 
-    $this->patchJson('/api/cdn-settings', $selfHosted())->assertOk()->assertJsonPath('data.selfHosted.allowNullOrigin', true);
+    $this->patchJson('/api/cdn-settings', $settings())->assertOk()->assertJsonPath('data.allowNullOrigin', true);
 });
 
-it('stores the allowed domains lowercased and without repeats, and reads them back', function () use ($selfHosted) {
-    $this->getJson('/api/cdn-settings')->assertJsonPath('data.selfHosted.allowedDomains', []);
+it('stores the allowed domains lowercased and without repeats, and reads them back', function () use ($settings) {
+    $this->getJson('/api/cdn-settings')->assertJsonPath('data.allowedDomains', []);
 
-    $this->patchJson('/api/cdn-settings', $selfHosted(['allowedDomains' => ['Example.com', '*.example.com', 'example.com']]))
+    $this->patchJson('/api/cdn-settings', $settings(['allowedDomains' => ['Example.com', '*.example.com', 'example.com']]))
         ->assertOk()
-        ->assertJsonPath('data.selfHosted.allowedDomains', ['example.com', '*.example.com']);
+        ->assertJsonPath('data.allowedDomains', ['example.com', '*.example.com']);
 
-    expect(app(CdnSettings::class)->providers['self_hosted']['allowed_domains'])->toBe(['example.com', '*.example.com']);
+    expect(app(CdnSettings::class)->allowed_domains)->toBe(['example.com', '*.example.com']);
 });
 
-it('keeps the allowed domains when a save does not mention them, and clears them when told to', function () use ($selfHosted) {
-    $this->patchJson('/api/cdn-settings', $selfHosted(['allowedDomains' => ['example.com']]))->assertOk();
+it('keeps the allowed domains when a save does not mention them, and clears them when told to', function () use ($settings) {
+    $this->patchJson('/api/cdn-settings', $settings(['allowedDomains' => ['example.com']]))->assertOk();
 
-    $this->patchJson('/api/cdn-settings', $selfHosted())->assertOk()->assertJsonPath('data.selfHosted.allowedDomains', ['example.com']);
+    $this->patchJson('/api/cdn-settings', $settings())->assertOk()->assertJsonPath('data.allowedDomains', ['example.com']);
 
-    $this->patchJson('/api/cdn-settings', $selfHosted(['allowedDomains' => []]))->assertOk()->assertJsonPath('data.selfHosted.allowedDomains', []);
+    $this->patchJson('/api/cdn-settings', $settings(['allowedDomains' => []]))->assertOk()->assertJsonPath('data.allowedDomains', []);
 });
 
-it('refuses what is not a bare hostname', function (string $domain) use ($selfHosted) {
-    $this->patchJson('/api/cdn-settings', $selfHosted(['allowedDomains' => [$domain]]))
+it('refuses what is not a bare hostname', function (string $domain) use ($settings) {
+    $this->patchJson('/api/cdn-settings', $settings(['allowedDomains' => [$domain]]))
         ->assertStatus(422)
-        ->assertJsonValidationErrors(['selfHosted.allowedDomains.0' => 'bare hostname']);
+        ->assertJsonValidationErrors(['allowedDomains.0' => 'bare hostname']);
 })->with([
     'a url' => 'https://example.com',
     'a path' => 'example.com/videos',
@@ -167,4 +164,35 @@ it('refuses what is not a bare hostname', function (string $domain) use ($selfHo
     'a wildcard over a whole tld' => '*.com',
     'a wildcard mid-name' => 'foo.*.example.com',
     'something aimed at the nginx config' => 'example.com" 0; } #',
+]);
+
+/**
+ * The token secret and the edge's S3 keys are written into the edge's nginx config as they stand.
+ * Anything nginx reads as syntax in one of them is a line of config — or a config that does not
+ * load, which is every proxy crashlooping at its next deploy, after the old container is gone.
+ */
+it('refuses a token secret that is not hex', function (string $secret) use ($settings) {
+    $this->patchJson('/api/cdn-settings', $settings(['tokenSecret' => $secret]))
+        ->assertStatus(422)->assertJsonValidationErrors('tokenSecret');
+
+    expect(app(CdnSettings::class)->token_secret)->toBe('secret');
+})->with([
+    'a directive' => '00; proxy_cache off',
+    'a space' => 'ab cd',
+    'not hex' => 'not-hex-at-all',
+    'half a byte' => 'abc',
+]);
+
+it('accepts a hex token secret', function () use ($settings) {
+    $this->patchJson('/api/cdn-settings', $settings(['tokenSecret' => 'A1b2C3d4e5F60718']))->assertOk();
+
+    expect(app(CdnSettings::class)->token_secret)->toBe('A1b2C3d4e5F60718');
+});
+
+it('refuses edge S3 keys that carry config syntax', function (array $edgeS3) use ($settings) {
+    $this->patchJson('/api/cdn-settings', [...$settings(), 'edgeS3' => $edgeS3])->assertStatus(422);
+})->with([
+    'a semicolon in the key' => [['accessKeyId' => 'edge;key', 'secretAccessKey' => 'edge-secret']],
+    'a brace in the secret' => [['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge{secret}']],
+    'a variable in the secret' => [['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge$secret']],
 ]);

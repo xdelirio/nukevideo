@@ -2,11 +2,7 @@
 
 namespace App\Providers;
 
-use App\Enums\CdnDriver;
-use App\Services\Cdn\BunnyProvider;
-use App\Services\Cdn\CdnProvider;
-use App\Services\Cdn\SelfHostedProvider;
-use App\Settings\CdnSettings;
+use App\Services\Cdn\ProxyRing;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -21,14 +17,11 @@ class AppServiceProvider extends ServiceProvider
             $this->app->register(TelescopeServiceProvider::class);
         }
 
-        // Scoped, not a singleton: the self-hosted provider holds a ProxyRing, which memoizes
-        // rows `nodes:probe` rewrites every minute. A singleton would pin that memo past the
-        // request — php-fpm would not notice, Octane and the queue worker would serve routing
-        // from a fleet that has since changed.
-        $this->app->scoped(CdnProvider::class, fn ($app) => match (CdnDriver::from($app->make(CdnSettings::class)->provider)) {
-            CdnDriver::SelfHosted => $app->make(SelfHostedProvider::class),
-            CdnDriver::Bunny => $app->make(BunnyProvider::class),
-        });
+        // One ring per request, shared by everything that signs a link in it. Scoped, not a
+        // singleton: it memoizes rows `nodes:probe` rewrites every minute, and a singleton would
+        // pin that memo past the request — php-fpm would not notice, Octane and the queue worker
+        // would serve routing from a fleet that has since changed.
+        $this->app->scoped(ProxyRing::class);
     }
 
     /**

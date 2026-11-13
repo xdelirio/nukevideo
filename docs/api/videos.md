@@ -233,6 +233,7 @@ POST /api/videos/{ulid}/play
 ```json
 {
   "resolution": 720,
+  "subtitlesFormat": "segments",
   "ip": "203.0.113.7",
   "trackingId": "customer-42",
   "speedLimitKbps": 3000,
@@ -243,7 +244,8 @@ POST /api/videos/{ulid}/play
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `resolution` | integer | Caps every output's ladder at this resolution, read as the short edge of the picture: `1080` is 1080p for a landscape 1920x1080 rendition and for a vertical 1080x1920 one alike. Each output resolves it against its own renditions: you get the largest packaged rendition at or below your ceiling, or the full ladder when the ceiling is already at or above the largest one. |
+| `resolution` | integer | Caps every output's ladder at this resolution, read as the short edge of the picture: `1080` is 1080p for a landscape 1920x1080 rendition and for a vertical 1080x1920 one alike. Each output is capped against its own renditions: the ones at or below your ceiling stay, the ones above it are left out of the manifest, and when every rendition is above it the smallest one stays. The cap is not in the URL — the link names the same manifest either way, its token carries an opaque key for the options, and the cap is applied when the manifest is requested. It states what a device can play; it is not an entitlement, since a rendition left out of a manifest is hidden, not locked. |
+| `subtitlesFormat` | string | How the **DASH** manifests carry their subtitles. Omitted or `vtt`: each text track points at one plain `.vtt` file, which every player that shows subtitles can load. `segments`: fragmented-MP4 WebVTT (`wvtt`), as packaged, for a player that prefers it. HLS manifests are the same either way — they already carry raw WebVTT. See [Subtitles inside the manifest](#subtitles-inside-the-manifest). |
 | `ip` | string | The viewer's address, when the link is minted from your backend. Defaults to the caller's own. With self-hosted [IP binding](/guide/cdn#ip-binding) on, the link plays from this address alone. |
 | `trackingId` | string | Your own label for this viewer. One id for the whole answer — one answer is one viewer opening one video — recorded against every token it hands out. |
 | `speedLimitKbps` | integer | Caps the transfer rate of the whole session — the manifest and every segment — in kilobits per second, the unit renditions are quoted in: `64` to `10000000`. Signed into the token, so it cannot be lifted by editing the URL. An adaptive player measures it as its bandwidth and settles on the renditions that fit under it. Omit for no limit. See [Speed limits](/guide/streaming#speed-limits). |
@@ -316,6 +318,28 @@ failed sibling is an ordinary state and does not cost the others their links. `s
 back empty, still as a `200`: the video exists and you are entitled to it, there is just nothing to
 play.
 
+### Subtitles inside the manifest
+
+Every manifest in `sources` already lists the video's subtitle tracks. In DASH the packager
+writes them as fragmented-MP4 WebVTT (`codecs="wvtt"`), which Shaka Player, dash.js and ExoPlayer
+read and a number of smart-TV and embedded players do not. So by default the DASH manifests
+describe the same tracks — same languages, labels and roles — as plain WebVTT files:
+
+```xml
+<AdaptationSet id="2" contentType="text" lang="en">
+  <Role schemeIdUri="urn:mpeg:dash:role:2011" value="subtitle"/>
+  <Label>English</Label>
+  <Representation id="2" bandwidth="82" mimeType="text/vtt">
+    <BaseURL>/01JVVVVVVVVVVVVVVVVVVVVVVV/play/01JXXXXXXXXXXXXXXXXXXXXXXX/sub.vtt?__hdnea__=…</BaseURL>
+  </Representation>
+</AdaptationSet>
+```
+
+The file sits in the playback directory and carries the link's own token, like every segment.
+Mint with `"subtitlesFormat": "segments"` to get the packaged form instead.
+On a deployment that does not sign its links there is no token to carry the options, so
+`segments` and `resolution` are both refused with a `422`.
+
 ### Standalone subtitles
 
 `subtitles` lists every subtitle track of the video as a standalone WebVTT file, for a player that
@@ -341,9 +365,8 @@ a manifest link covers the whole playback directory. They are **not bound to the
 with [IP binding](/guide/cdn#ip-binding) on, and `speedLimitKbps` does not apply to them — a few
 kilobytes of text is not what either protects. And their bytes are booked as `download_bytes` in
 [analytics](/api/analytics), under the same `trackingId`, because they are served from the download
-zone. The self-hosted edge sends them with open CORS, so a cross-origin
-`<track crossorigin="anonymous">` loads them; on Bunny that is the pull zone's own CORS setting,
-which has to include `vtt`.
+zone. The edge sends them with open CORS, so a cross-origin
+`<track crossorigin="anonymous">` loads them.
 
 Every URL in one answer expires at the same `expiresAt`: they are signed in the same request
 against the same provider window. Responds `409` while the video is still processing and `503`
@@ -374,7 +397,7 @@ POST /api/videos/play
 | Field | Type | Notes |
 |-------|------|-------|
 | `videos` | string[] | The video ULIDs, `1` to `500` of them. Duplicates are answered once. |
-| `resolution`, `ip`, `trackingId`, `speedLimitKbps`, `download`, `expiresIn` | | Exactly as in [Playback URLs](#playback-urls), applied to every video in the list. |
+| `resolution`, `subtitlesFormat`, `ip`, `trackingId`, `speedLimitKbps`, `download`, `expiresIn` | | Exactly as in [Playback URLs](#playback-urls), applied to every video in the list. |
 
 **Response:** a list with one entry per video that can be played, in the order you asked for
 them. Each entry is what [Playback URLs](#playback-urls) answers for that video, with its

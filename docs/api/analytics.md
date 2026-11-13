@@ -1,9 +1,8 @@
 # Analytics
 
 Delivery bandwidth, viewer IPs, encoding time and account consumption, read from the `usage_daily` table. This is
-the read side of the CDN access logs: the self-hosted edges ship them through Vector and Bunny pull
-zones are polled by `bunny:ingest-logs` ([CDN & Delivery](/guide/cdn#how-the-log-ingestion-works)),
-and both land in that table.
+the read side of the CDN access logs, which the edges ship through Vector
+([CDN & Delivery](/guide/cdn)) into that table.
 
 Everything on this page is readable with **any authenticated token** — a personal access token or a
 [project API key](/api/authentication) — except [per-node delivery](#per-node-delivery), which is
@@ -18,12 +17,19 @@ Every read below narrows to one project when the request carries project context
 `X-Project-Ulid` header, or a project API key, which carries its own. Scoped that way, the numbers
 and the identifiers in them are your project's and nobody else's. The exceptions say so where they
 appear: encoding time, the node count and the [queue](#queue) are always instance-wide, and the
-[batch by tracking id](#batch-bandwidth-by-tracking-id) read never narrows to a project.
+[batch by tracking id](#batch-bandwidth-by-tracking-id) read narrows to your **account** rather
+than to one project.
 
 Without project context the aggregates are **instance-wide**: totals across every project on the
 installation. Those name nobody, which is why they are shared at all. The breakdowns that *do* name
 things — viewer addresses, viewer labels, video ULIDs — are then withheld or must be asked for by
-name, because unscoped they would enumerate other tenants'.
+name, because unscoped they would enumerate other tenants'. Asking by name without a project is
+answered **inside your own account**: a video ULID or tracking id that is not yours matches
+nothing. And a `video` or `trackingId` *filter* on the dashboard reads needs project context
+outright — without it the request is a `422`, since a filtered total is one video's traffic and a
+video's ULID is in every playback URL it was ever given.
+
+Every range is `from` ≤ `to` and at most **3660 days** long; anything else is a `422`.
 
 This is not an administrator/tenant distinction. An administrator that names no project gets the
 same aggregates, and the same withheld breakdowns, as anyone else.
@@ -338,6 +344,14 @@ POST /api/analytics/tracking-ids
 ```
 
 Both verbs run the same read and take the same fields — as a query string or as a JSON body. Use
+
+::: warning Scoped to your account
+The ids are your own free text — usually your subscriber ids — so another tenant can be using the
+same ones. This read answers with the bytes delivered for **your account's** videos only, whether
+you call it with a session, a personal token or a project API key. It used to be instance-wide,
+which both showed one tenant another's per-subscriber traffic and added it to its own totals.
+:::
+
 `POST` once the list outgrows a URL: a thousand 64-character ids is roughly 80 KB of query string,
 past what most proxies will put in a request line. Nothing is written either way.
 
@@ -609,9 +623,8 @@ the bytes in it are bytes somebody consumed and nobody was billed for.
 :::
 
 ::: tip
-Bandwidth is only as complete as the ingestion behind it: a Bunny pull zone is polled every five
-minutes over a window that trails two minutes behind, so the last few minutes of traffic are
-normally not in yet.
+Bandwidth is only as complete as the ingestion behind it: an edge ships its log in batches and
+the API ingests them from a queue, so the last moments of traffic are normally not in yet.
 :::
 
 ::: warning Deleted videos leave their bytes behind

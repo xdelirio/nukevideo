@@ -76,6 +76,6 @@ Traefik publishes each service under a `*.nukevideo.localhost` hostname (these r
 - [Templates](/guide/templates) — Define encoding configurations.
 - [Streaming & VOD](/guide/streaming) — How packaged content is served.
 - [Nodes](/guide/nodes) — Add worker and proxy nodes.
-- [CDN & Delivery](/guide/cdn) — Proxy nodes vs Bunny CDN.
+- [CDN & Delivery](/guide/cdn) — How proxy nodes deliver and protect playback.
 - [Configuration](/guide/configuration) — Environment variables.
 - [API Reference](/api/authentication) — Start integrating with the API.

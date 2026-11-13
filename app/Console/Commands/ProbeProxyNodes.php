@@ -2,10 +2,8 @@
 
 namespace App\Console\Commands;
 
-use App\Enums\CdnDriver;
 use App\Models\Node;
 use App\Services\Cdn\ProxyRing;
-use App\Settings\CdnSettings;
 use Illuminate\Console\Command;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
@@ -52,12 +50,8 @@ class ProbeProxyNodes extends Command
      */
     private const GRACE_MINUTES = 10;
 
-    public function handle(CdnSettings $settings): int
+    public function handle(): int
     {
-        if ($settings->provider !== CdnDriver::SelfHosted->value) {
-            return self::SUCCESS;
-        }
-
         $nodes = Node::proxy()->active()->whereNotNull('hostname')->get();
 
         if ($nodes->isEmpty()) {

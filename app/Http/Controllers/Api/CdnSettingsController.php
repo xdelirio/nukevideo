@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api;
 
 use App\Data\CdnSettingsData;
-use App\Enums\CdnDriver;
 use App\Http\Controllers\Controller;
 use App\Settings\CdnSettings;
 use App\Settings\EdgeS3Settings;
@@ -21,29 +20,17 @@ class CdnSettingsController extends Controller
 
     public function update(Request $request, CdnSettings $settings, EdgeS3Settings $edgeS3): JsonResponse
     {
-        // Only the active provider's config is required; the other is left as-is so switching
-        // providers never forces you to fill a config you aren't using.
-        $selfHostedActive = $request->input('provider') === CdnDriver::SelfHosted->value;
-        $bunnyActive = $request->input('provider') === CdnDriver::Bunny->value;
-
         $validated = $request->validate([
-            'provider' => ['required', Rule::enum(CdnDriver::class)],
-
-            'selfHosted' => [Rule::requiredIf($selfHostedActive), 'array'],
-            'selfHosted.tokenSecret' => ['nullable', 'string'],
-            'selfHosted.tokenName' => [Rule::requiredIf($selfHostedActive), 'string', 'regex:/^[a-z0-9_]+$/'],
-            'selfHosted.tokenWindow' => [Rule::requiredIf($selfHostedActive), 'integer', 'min:1'],
-            'selfHosted.bindIp' => ['sometimes', 'boolean'],
-            'selfHosted.allowedDomains' => ['sometimes', 'array', 'max:'.AllowedDomains::MAX],
-            'selfHosted.allowedDomains.*' => ['string', 'regex:'.AllowedDomains::pattern()],
-            'selfHosted.allowNullOrigin' => ['sometimes', 'boolean'],
-
-            'bunny' => [Rule::requiredIf($bunnyActive), 'array'],
-            'bunny.host' => [Rule::requiredIf($bunnyActive), 'string'],
-            'bunny.tokenKey' => ['nullable', 'string'],
-            'bunny.tokenWindow' => [Rule::requiredIf($bunnyActive), 'integer', 'min:1'],
-            'bunny.apiKey' => ['nullable', 'string'],
-            'bunny.pullZoneId' => ['nullable', 'string'],
+            // Hex, in whole bytes: the signer packs it with `H*` and the edge writes it into its
+            // nginx config as it stands, where anything else is either a signature no edge
+            // accepts or a line of config — and an edge that cannot load its config crashloops.
+            'tokenSecret' => ['nullable', 'string', 'max:512', 'regex:/^([0-9a-fA-F]{2})+\z/'],
+            'tokenName' => ['required', 'string', 'regex:/^[a-z0-9_]+$/'],
+            'tokenWindow' => ['required', 'integer', 'min:1'],
+            'bindIp' => ['sometimes', 'boolean'],
+            'allowedDomains' => ['sometimes', 'array', 'max:'.AllowedDomains::MAX],
+            'allowedDomains.*' => ['string', 'regex:'.AllowedDomains::pattern()],
+            'allowNullOrigin' => ['sometimes', 'boolean'],
 
             // Validated as a pair: half of one signs every S3 request wrongly, and every cache miss
             // on the proxies would be a 403. An unchanged key may leave the secret out, since the
@@ -54,7 +41,9 @@ class CdnSettingsController extends Controller
                 'nullable',
                 'string',
                 'max:255',
-                'regex:/^\S+$/D',
+                // What an S3 key can be made of — and, since the edge writes both into its nginx
+                // config, nothing nginx would read as syntax.
+                'regex:/^[A-Za-z0-9\/+=._-]+\z/',
             ],
             'edgeS3.secretAccessKey' => [
                 Rule::requiredIf(fn () => $request->filled('edgeS3.accessKeyId') && (
@@ -63,35 +52,33 @@ class CdnSettingsController extends Controller
                 'nullable',
                 'string',
                 'max:255',
-                'regex:/^\S+$/D',
+                // What an S3 key can be made of — and, since the edge writes both into its nginx
+                // config, nothing nginx would read as syntax.
+                'regex:/^[A-Za-z0-9\/+=._-]+\z/',
             ],
         ], [
-            'selfHosted.allowedDomains.*.regex' => 'Each domain must be a bare hostname, like example.com or *.example.com. ":input" is not.',
+            'tokenSecret.regex' => 'The token secret must be hexadecimal, in whole bytes (an even number of digits).',
+            'allowedDomains.*.regex' => 'Each domain must be a bare hostname, like example.com or *.example.com. ":input" is not.',
         ]);
 
-        $providers = $settings->providers;
+        // A field the request leaves out keeps what is stored: an older panel, or a script, saving
+        // the rest must not switch a protection off behind the operator. The secret arrives as
+        // null when the field is empty, so it too can only be replaced, never blanked.
+        $settings->token_name = $validated['tokenName'];
+        $settings->token_window = (int) $validated['tokenWindow'];
 
-        if (isset($validated['selfHosted'])) {
-            $providers['self_hosted'] = array_merge($providers['self_hosted'] ?? [], array_filter([
-                'token_secret' => $validated['selfHosted']['tokenSecret'] ?? null,
-                'token_name' => $validated['selfHosted']['tokenName'] ?? null,
-                'token_window' => isset($validated['selfHosted']['tokenWindow']) ? (int) $validated['selfHosted']['tokenWindow'] : null,
-                'bind_ip' => isset($validated['selfHosted']['bindIp']) ? (bool) $validated['selfHosted']['bindIp'] : null,
-                // An empty list survives the filter below, which only drops null: it is how the
-                // restriction gets lifted.
-                'allowed_domains' => isset($validated['selfHosted']['allowedDomains']) ? AllowedDomains::normalize($validated['selfHosted']['allowedDomains']) : null,
-                'allow_null_origin' => isset($validated['selfHosted']['allowNullOrigin']) ? (bool) $validated['selfHosted']['allowNullOrigin'] : null,
-            ], fn ($v) => $v !== null));
+        if (isset($validated['tokenSecret'])) {
+            $settings->token_secret = $validated['tokenSecret'];
         }
-
-        if (isset($validated['bunny'])) {
-            $providers['bunny'] = array_merge($providers['bunny'] ?? [], array_filter([
-                'host' => $validated['bunny']['host'] ?? null,
-                'token_key' => $validated['bunny']['tokenKey'] ?? null,
-                'token_window' => isset($validated['bunny']['tokenWindow']) ? (int) $validated['bunny']['tokenWindow'] : null,
-                'api_key' => $validated['bunny']['apiKey'] ?? null,
-                'pull_zone_id' => $validated['bunny']['pullZoneId'] ?? null,
-            ], fn ($v) => $v !== null));
+        if (isset($validated['bindIp'])) {
+            $settings->bind_ip = (bool) $validated['bindIp'];
+        }
+        // An empty list is a value, not an absence: it is how the restriction gets lifted.
+        if (isset($validated['allowedDomains'])) {
+            $settings->allowed_domains = AllowedDomains::normalize($validated['allowedDomains']);
+        }
+        if (isset($validated['allowNullOrigin'])) {
+            $settings->allow_null_origin = (bool) $validated['allowNullOrigin'];
         }
 
         if (array_key_exists('edgeS3', $validated)) {
@@ -102,8 +89,6 @@ class CdnSettingsController extends Controller
             $edgeS3->save();
         }
 
-        $settings->provider = $validated['provider'];
-        $settings->providers = $providers;
         $settings->save();
 
         return response()->json(['data' => CdnSettingsData::fromSettings($settings)]);

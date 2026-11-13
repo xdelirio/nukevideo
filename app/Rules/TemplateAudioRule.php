@@ -64,6 +64,15 @@ class TemplateAudioRule implements ValidationRule
                 continue;
             }
 
+            // A rung is a channel count and its bitrate. Anything else in it is merged over the
+            // audio block at encode time without having been validated here — a codec of its
+            // own, most of all.
+            if (array_diff(array_keys($channelConfig), ['channels', 'audio_bitrate']) !== []) {
+                $fail("Channel configuration at index {$index} may only set channels and audio_bitrate.");
+
+                continue;
+            }
+
             $this->validateParameters($channelConfig, $channelRules, $fail);
         }
     }

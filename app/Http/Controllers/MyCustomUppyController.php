@@ -116,12 +116,25 @@ class MyCustomUppyController extends Controller
     {
         $this->authorizeUploadKey($request);
 
+        // Passed to S3 as it arrives, so it has to be what S3 takes: a list of part numbers and
+        // their ETags. Anything else used to surface as an SDK exception and a 500.
+        $parts = $request->input('parts');
+        $wellFormed = is_array($parts) && array_is_list($parts) && count($parts) <= 10000
+            && collect($parts)->every(fn ($part) => is_array($part)
+                && filter_var($part['PartNumber'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 10000]]) !== false
+                && is_string($part['ETag'] ?? null) && strlen($part['ETag']) <= 255);
+
+        abort_unless($wellFormed, 422, 'The parts of the upload must be a list of part numbers and ETags.');
+
         $result = $this->onExistingUpload(fn () => $this->client->completeMultipartUpload([
             'Bucket' => $this->bucket,
             'Key' => $request->input('key'),
             'UploadId' => $uploadId,
             'MultipartUpload' => [
-                'Parts' => $request->input('parts'),
+                'Parts' => array_map(fn (array $part) => [
+                    'PartNumber' => (int) $part['PartNumber'],
+                    'ETag' => $part['ETag'],
+                ], $parts),
             ],
         ]));
 

@@ -162,6 +162,25 @@ function packets(array $lines): string
 }
 
 describe('windowsFromPackets', function () {
+    it('counts keyframes from the start of the file, not from the container\'s clock', function () {
+        // A transport stream captured off air starts hours into its own clock: 5001.4 s here.
+        // Compared as they are against a duration counted from zero, every keyframe sat past the
+        // end, and a 300 s video was planned as a single 300 s chunk that then timed out.
+        $offset = 5001.4;
+        $packets = packets([[$offset, true], [$offset + 100.0, true], [$offset + 200.0, true], [$offset + 240.5, false]]);
+
+        expect(planner()->windowsFromPackets($packets, 300.0, 100))->toBe([[0.0, 300.0]])
+            ->and(planner()->windowsFromPackets($packets, 300.0, 100, $offset))
+            ->toBe([[0.0, 100.0], [100.0, 200.0], [200.0, 241.0]]);
+    });
+
+    it('treats a packet just before the container\'s start as the first frame', function () {
+        // Reordering at the head can put a packet a frame ahead of the start time.
+        $windows = planner()->windowsFromPackets(packets([[9.96, true], [110.0, true], [150.0, false]]), 300.0, 100, 10.0);
+
+        expect($windows[0][0])->toBe(0.0)->and($windows[0][1])->toBe(100.0);
+    });
+
     it('ends the last window where the video track does, not where the container does', function () {
         // The bug that failed a 1h52m MKV forever: eac3 ran 55s past the picture, so the container
         // duration asked the last chunk for video that did not exist and the truncation guard

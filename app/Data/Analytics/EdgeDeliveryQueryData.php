@@ -4,6 +4,7 @@ namespace App\Data\Analytics;
 
 use App\Data\RequestData;
 use App\Http\Controllers\Api\AnalyticsController;
+use App\Support\DateRange;
 
 /**
  * The date range of the per-node delivery report ({@see AnalyticsController::edges()}).
@@ -20,8 +21,8 @@ class EdgeDeliveryQueryData extends RequestData
     public static function rules(): array
     {
         return [
-            'from' => 'required|date_format:Y-m-d',
-            'to' => 'required|date_format:Y-m-d',
+            'from' => DateRange::from(),
+            'to' => DateRange::to(),
         ];
     }
 }

@@ -4,31 +4,26 @@ declare(strict_types=1);
 
 namespace App\Services\Cdn;
 
-use App\Data\BunnyConfigData;
-use App\Data\SelfHostedConfigData;
-use App\Enums\CdnDriver;
 use App\Settings\CdnSettings;
 use Illuminate\Support\Facades\Cache;
 
 /**
  * What a minted link's token means: the tracking id the mint attributed it to.
  *
- * One mechanism for every provider. The URL never carries the id — Bunny's directory token
- * refuses extra signed parameters and a query is not inherited by the segments; on the
- * self-hosted edge it would cost a path segment nginx has to strip again. The token IS the
- * carrier: every request a link produces logs it, so the mint records `hash(token) → id` and
- * the log ingest resolves the hash back. Best-effort by nature — a mapping lost to a cache
- * restart costs the label, never the bytes.
+ * The URL never carries the id: a query is not inherited by the segments, and a path segment is
+ * one the edge's nginx would have to strip again. The token IS the carrier: every request a link
+ * produces logs it, so the mint records `hash(token) → id` and the log ingest resolves the hash
+ * back. Best-effort by nature — a mapping lost to a cache restart costs the label, never the
+ * bytes.
  */
 class TrackingRegistry
 {
     /**
-     * Seconds a mapping outlives the token it describes. A segment fetched right before expiry
-     * reaches the ingest minutes later (Bunny's log API lags, and the command runs every five),
-     * and a Bunny mint may push the expiry past the window to keep its token unique
-     * ({@see BunnyProvider}).
+     * Seconds a mapping outlives the token it describes: a segment fetched right before expiry
+     * reaches the ingest later, once the edge's log shipper has batched it and the queue has
+     * drained it.
      */
-    private const GRACE = 1800 + BunnyProvider::EXPIRY_JITTER;
+    private const GRACE = 1800;
 
     public function __construct(private CdnSettings $settings) {}
 
@@ -136,18 +131,9 @@ class TrackingRegistry
         return ['tracking' => $tracking, 'downloads' => $downloads];
     }
 
-    /**
-     * How long the active provider's links stay valid. Each provider keeps its own window, so
-     * reading one of them unconditionally would report the self-hosted lifetime for a link Bunny
-     * signed with a different one.
-     */
+    /** How long a link stays valid when the mint does not ask for a lifetime of its own. */
     public function tokenWindow(): int
     {
-        $config = $this->settings->providers[$this->settings->provider] ?? [];
-
-        return match (CdnDriver::from($this->settings->provider)) {
-            CdnDriver::Bunny => BunnyConfigData::from($config)->tokenWindow,
-            CdnDriver::SelfHosted => SelfHostedConfigData::from($config)->tokenWindow,
-        };
+        return $this->settings->token_window;
     }
 }

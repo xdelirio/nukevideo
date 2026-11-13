@@ -366,18 +366,21 @@ class AnalyticsService
      * Bounded by construction at `count($values) × count(UsageMetric::delivery())`, times the range
      * when `$daily`, and the request caps the list ({@see TrackingIdBytesQueryData}).
      *
-     * Instance-wide unless a project is passed, and the endpoint above it deliberately does not
-     * pass one: traffic whose video has been deleted keeps its tracking id but loses its project,
-     * and dropping it would under-report what a subscriber actually consumed. Passing
+     * Narrowed to one account, not to one project: a tracking id is the integrator's own free
+     * text — usually its subscriber id — so the same value exists under other accounts, and an
+     * instance-wide read both showed one tenant another's subscribers and added their bytes to
+     * its own. The account rather than the project because the row keeps the owner it had when
+     * the traffic was ingested, so a subscriber's bytes on a video that has since been deleted
+     * still count; only what arrives after the deletion has no owner left to count under. Passing
      * `''` among them asks for the traffic whose id did not survive the round trip through the CDN
      * log, which is how a caller reconciles its own ids against the total.
      *
      * @param  list<string>  $trackingIds
      * @return array<int, array{tracking_id: string, metric: string, bytes: float, date?: string}>
      */
-    public function bytesByTrackingIds(string $from, string $to, array $trackingIds, ?string $metric = null, bool $daily = false, ?int $projectId = null): array
+    public function bytesByTrackingIds(string $from, string $to, array $trackingIds, ?string $metric = null, bool $daily = false, ?int $projectId = null, ?int $accountId = null): array
     {
-        return $this->batch(MetricDimension::TRACKING_ID, 'tracking_id', $from, $to, $trackingIds, $metric, $daily, $projectId);
+        return $this->batch(MetricDimension::TRACKING_ID, 'tracking_id', $from, $to, $trackingIds, $metric, $daily, $projectId, $accountId);
     }
 
     /**
@@ -411,7 +414,7 @@ class AnalyticsService
      * @param  list<string>  $values
      * @return array<int, array<string, mixed>>
      */
-    private function batch(MetricDimension $dimension, string $column, string $from, string $to, array $values, ?string $metric, bool $daily, ?int $projectId = null): array
+    private function batch(MetricDimension $dimension, string $column, string $from, string $to, array $values, ?string $metric, bool $daily, ?int $projectId = null, ?int $accountId = null): array
     {
         if ($values === []) {
             return [];
@@ -427,6 +430,7 @@ class AnalyticsService
             $dimensions,
             [$column => $values],
             $metric === null || $metric === '' ? [] : [$metric],
+            accountId: $accountId,
             projectId: $projectId,
         );
 

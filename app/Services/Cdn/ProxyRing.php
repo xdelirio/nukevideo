@@ -6,6 +6,7 @@ namespace App\Services\Cdn;
 
 use App\Data\VideoData;
 use App\Models\Node;
+use App\Providers\AppServiceProvider;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
@@ -22,17 +23,12 @@ use Illuminate\Support\Facades\Log;
  * per row through {@see AssetUrlResolver}, so a page of 25 videos paid the query and the sort
  * fifty times over for an answer that cannot change inside one request.
  *
- * The memo is per instance, and the instance is held by {@see CdnProvider}, which is bound
- * `scoped` — so the answer lives exactly as long as the request or the job that asked for it,
- * and is never cached across them. That matters: the set it reads is what `nodes:probe` rewrites
+ * The memo is per instance, and the instance is bound `scoped` ({@see AppServiceProvider}) — so
+ * the answer lives exactly as long as the request or the job that asked for it, and is never
+ * cached across them. That matters: the set it reads is what `nodes:probe` rewrites
  * every minute, and a node leaving the fleet has to reach the next link rather than the next TTL.
  * The table is a handful of rows behind one small query, so the single query a request now makes
  * is not worth trading for staleness.
- *
- * Nothing binds this class itself. It has no constructor to satisfy, so the container builds one
- * per holder, and today the only holder is the provider above. Anything that later injects a
- * second one gets its own memo — correct, just one more query; binding it `scoped` at that point
- * would share the memo again without touching a single call site.
  */
 class ProxyRing
 {

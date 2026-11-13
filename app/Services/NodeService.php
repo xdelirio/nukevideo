@@ -2,11 +2,8 @@
 
 namespace App\Services;
 
-use App\Console\Commands\IngestBunnyLogs;
 use App\Data\Node\DeployNodeData;
 use App\Data\NodeData;
-use App\Data\SelfHostedConfigData;
-use App\Enums\CdnDriver;
 use App\Enums\NodeAccel;
 use App\Enums\NodeType;
 use App\Models\Node;
@@ -151,13 +148,13 @@ class NodeService
         // entrypoint defaults apply. Cache sizing is deliberately not among them: the edge sizes
         // its cache to the filesystem it is given ({@see vod/entrypoint.sh}), and the one case
         // that needs a cap — no pool, caching on the OS disk — is set by the deploy script.
-        $cdn = SelfHostedConfigData::from($this->cdnSettings->providers['self_hosted'] ?? []);
+        $cdn = $this->cdnSettings;
         $cdnEnv = [
-            'VOD_TOKEN_SECRET' => $cdn->tokenSecret,
-            'VOD_TOKEN_NAME' => $cdn->tokenName,
-            'VOD_ALLOWED_DOMAINS' => implode(',', AllowedDomains::forEdge($cdn->allowedDomains)),
+            'VOD_TOKEN_SECRET' => $cdn->token_secret,
+            'VOD_TOKEN_NAME' => $cdn->token_name,
+            'VOD_ALLOWED_DOMAINS' => implode(',', AllowedDomains::forEdge($cdn->allowed_domains)),
             // Absent rather than `0` while off: the entrypoint reads anything but `1` as off.
-            'VOD_ALLOW_NULL_ORIGIN' => $cdn->allowNullOrigin ? '1' : '',
+            'VOD_ALLOW_NULL_ORIGIN' => $cdn->allow_null_origin ? '1' : '',
         ];
         foreach ($cdnEnv as $key => $value) {
             if ($value !== '') {
@@ -237,6 +234,11 @@ class NodeService
         'VOD_ALLOWED_DOMAINS',
         'VOD_ALLOW_NULL_ORIGIN',
         'VOD_S3_TLS_VERIFY',
+        // Where the edge asks for master manifests, and the secret it asks with — the same one
+        // the node's Vector ships the access log with. The only credential in this container
+        // besides the bucket's read keys and the token secret.
+        'INTERNAL_API_URL',
+        'INTERNAL_API_SECRET',
         'VOD_CACHE_MAX_SIZE',
         'VOD_CACHE_MIN_FREE',
         'VOD_CACHE_KEYS_ZONE',
@@ -569,9 +571,7 @@ class NodeService
     {
         // nginx templates the secure-token key at boot; an empty one renders `key ;` and the
         // container crashloops on an emerg. Fail here with a message that names the fix instead.
-        $cdn = SelfHostedConfigData::from($this->cdnSettings->providers['self_hosted'] ?? []);
-
-        if ($cdn->tokenSecret === '') {
+        if ($this->cdnSettings->token_secret === '') {
             throw new \RuntimeException('CDN token secret is empty. Set it in CDN Settings before deploying a proxy node.');
         }
 
@@ -712,25 +712,20 @@ class NodeService
     }
 
     /**
-     * Vector only earns its keep on a self-hosted edge. It ships exactly one thing — the
+     * Vector only earns its keep on an edge. It ships exactly one thing — the
      * `ip=/bytes=/video=` lines the vod nginx writes — into the bandwidth pipeline, and every other
      * container's logs are dropped by its own transform, so on a worker node it reads all of
-     * Horizon's output to produce nothing. When the CDN is Bunny it has nothing to read at all:
-     * viewer traffic never reaches our edge and {@see IngestBunnyLogs} polls Bunny's Logging API
-     * into the very same pipeline instead. It was also the one deploy artifact with no node id in
+     * Horizon's output to produce nothing. It was also the one deploy artifact with no node id in
      * its name, so every environment sharing a host fought over it.
      *
      * Deploying anywhere else therefore removes it (empty VECTOR_RUN_ARGS), including where a
-     * previous deploy or a previous CDN provider left one running.
+     * previous deploy left one running.
      */
     private function vectorVars(Node $node): array
     {
         $name = Node::containerPrefix().'_vector';
 
-        $collectsEdgeLogs = $node->type === NodeType::PROXY
-            && $this->cdnSettings->provider === CdnDriver::SelfHosted->value;
-
-        if (! $collectsEdgeLogs) {
+        if ($node->type !== NodeType::PROXY) {
             return ['VECTOR_CONTAINER' => $name, 'VECTOR_RUN_ARGS' => ''];
         }
 

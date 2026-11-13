@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\StreamStatus;
 use App\Observers\StreamObserver;
 use App\Services\ChunkTranscodeService;
+use App\Services\Manifest\SubtitleFormatTransformer;
 use App\Services\PackagerCommandBuilder;
 use App\Support\Cpu;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
@@ -90,6 +91,15 @@ class Stream extends Model
             && ! ChunkTranscodeService::accelForCodec(data_get($this->input_params, 'video_codec'))
             && Cpu::isHeavy((int) $this->width, (int) $this->height);
     }
+
+    /**
+     * A subtitle's whole track as one plain WebVTT file, published next to its packaged segments
+     * (`{videoUlid}/play/{streamUlid}/sub.vtt`). A byte copy of the file in the download zone, kept
+     * here as well because a playback token authorizes the play zone and nothing else, and this
+     * is what a DASH manifest names when a link asks for `subtitlesFormat=vtt`
+     * ({@see SubtitleFormatTransformer}).
+     */
+    public const SIDECAR_VTT = 'sub.vtt';
 
     /** This stream's `path` with the leading `{videoUlid}/` segment stripped, e.g. `video/{ulid}.mp4`.
      *  String-derived (no `video` relation load) since the prefix is already encoded in `path`. */

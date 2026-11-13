@@ -11,12 +11,14 @@
  */
 
 use App\Data\Video\PlayVideosData;
+use App\Enums\SubtitleFormat;
 use App\Models\Node;
 use App\Models\Output;
 use App\Models\Project;
 use App\Models\Stream;
 use App\Models\User;
 use App\Models\Video;
+use App\Services\Cdn\ManifestOptionsRegistry;
 use App\Services\Cdn\TrackingRegistry;
 use App\Settings\CdnSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -119,10 +121,7 @@ function playSubtitle(Video $video, string $language = 'en', array $attributes =
 beforeEach(function () {
     Storage::fake('s3');
 
-    CdnSettings::fake([
-        'provider' => 'self_hosted',
-        'providers' => ['self_hosted' => ['token_secret' => bin2hex('secret'), 'token_window' => 3600], 'bunny' => []],
-    ]);
+    CdnSettings::fake(['token_secret' => bin2hex('secret'), 'token_window' => 3600]);
 
     Node::create([
         'name' => 'edge',
@@ -228,7 +227,15 @@ it('answers with no sources at all rather than an error when nothing can be serv
         ->and($data['thumbnailUrl'])->not->toBeEmpty();
 });
 
-it('resolves the ladder cap against each output on its own', function () {
+/** The token of a minted URL, as the edge hands it back when it asks for the manifest. */
+function linkToken(string $url): string
+{
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+    return $query['__hdnea__'];
+}
+
+it('signs the full manifest and leaves the resolution cap to the options the link names', function () {
     $video = playVideo();
     $tall = playOutput($video, heights: [480, 720, 1080], formats: ['hls']);
     $short = playOutput($video, heights: [360, 480], formats: ['hls']);
@@ -236,11 +243,167 @@ it('resolves the ladder cap against each output on its own', function () {
     $sources = $this->postJson("/api/videos/{$video->ulid}/play", ['resolution' => 720])
         ->assertOk()->json('data.sources');
 
-    // 720 is a real rung of the first output and above every rung of the second, where the
-    // uncapped master already is the answer. The cap is not echoed back — it only shows in which
-    // manifest was signed.
-    expect($sources[0]['url'])->toContain("{$tall->ulid}.720.m3u8")
+    // No capped file name any more: the cap is applied when the manifest is requested, against
+    // each output's own ladder, from what the mint filed under the token.
+    expect($sources[0]['url'])->toContain("{$tall->ulid}.m3u8")
         ->and($sources[1]['url'])->toContain("{$short->ulid}.m3u8");
+
+    $registry = app(ManifestOptionsRegistry::class);
+
+    expect($registry->resolve(linkToken($sources[0]['url']))->resolution)->toBe(720)
+        ->and($registry->resolve(linkToken($sources[1]['url']))->resolution)->toBe(720);
+});
+
+it('names the subtitle format in every manifest link and in no subtitle link', function () {
+    $video = playVideo();
+    playOutput($video);
+    playSubtitle($video);
+
+    $data = $this->postJson("/api/videos/{$video->ulid}/play", ['subtitlesFormat' => 'segments'])
+        ->assertOk()->json('data');
+
+    $registry = app(ManifestOptionsRegistry::class);
+
+    foreach ($data['sources'] as $source) {
+        expect($registry->resolve(linkToken($source['url']))->subtitlesFormat)->toBe(SubtitleFormat::SEGMENTS);
+    }
+
+    // The standalone file is one object behind its own signature; there is no manifest to build.
+    expect($registry->resolve(linkToken($data['subtitles'][0]['url']))->isDefault())->toBeTrue();
+});
+
+it('never bills one viewer\'s bytes to another who minted in the same second', function () {
+    // What is recorded against a token is looked up by its hash, so two identical tokens are one
+    // entry: the later mint's tracking id answered for both viewers, and one `download` mint
+    // turned the other's streaming into download bytes.
+    $this->freezeTime();
+
+    $video = playVideo();
+    playOutput($video, formats: ['hls']);
+
+    $first = $this->postJson("/api/videos/{$video->ulid}/play", ['trackingId' => 'viewer-1'])->json('data.sources.0.url');
+    $second = $this->postJson("/api/videos/{$video->ulid}/play", ['trackingId' => 'viewer-2', 'download' => true])->json('data.sources.0.url');
+    $anonymous = $this->postJson("/api/videos/{$video->ulid}/play")->json('data.sources.0.url');
+
+    expect(linkToken($first))->not->toBe(linkToken($second))
+        ->and(linkToken($anonymous))->not->toBe(linkToken($first));
+
+    $hash = fn (string $url) => hash('sha256', linkToken($url));
+    $found = app(TrackingRegistry::class)->lookupMany([$hash($first), $hash($second), $hash($anonymous)]);
+
+    // The third mint named no viewer and is labelled by the caller's default, whatever that is —
+    // the point is that it is neither of the other two's.
+    expect($found['tracking'][$hash($first)])->toBe('viewer-1')
+        ->and($found['tracking'][$hash($second)])->toBe('viewer-2')
+        ->and($found['tracking'][$hash($anonymous)])->not->toBeIn(['viewer-1', 'viewer-2'])
+        ->and($found['downloads'])->toBe([$hash($second) => true]);
+});
+
+it('never hands one viewer the manifest options of another who minted in the same second', function () {
+    // A token is its expiry, its ACL and an HMAC of the two: two viewers minting the same video
+    // within one second used to hold the very same token, so whatever the options were filed
+    // under, the later mint answered for both.
+    $this->freezeTime();
+
+    $video = playVideo();
+    playOutput($video, heights: [360, 1080], formats: ['hls']);
+
+    $capped = $this->postJson("/api/videos/{$video->ulid}/play", ['resolution' => 360])->json('data.sources.0.url');
+    $plain = $this->postJson("/api/videos/{$video->ulid}/play")->json('data.sources.0.url');
+    $segments = $this->postJson("/api/videos/{$video->ulid}/play", ['subtitlesFormat' => 'segments'])->json('data.sources.0.url');
+
+    $registry = app(ManifestOptionsRegistry::class);
+
+    expect($registry->resolve(linkToken($plain))->isDefault())->toBeTrue()
+        ->and($registry->resolve(linkToken($capped))->resolution)->toBe(360)
+        ->and($registry->resolve(linkToken($capped))->subtitlesFormat)->toBe(SubtitleFormat::VTT)
+        ->and($registry->resolve(linkToken($segments))->resolution)->toBeNull()
+        ->and($registry->resolve(linkToken($segments))->subtitlesFormat)->toBe(SubtitleFormat::SEGMENTS);
+});
+
+it('adds nothing to the token of a mint that asks nothing of its manifests', function (array $body) {
+    $video = playVideo();
+    playOutput($video);
+
+    $sources = $this->postJson("/api/videos/{$video->ulid}/play", $body)->assertOk()->json('data.sources');
+    $token = linkToken($sources[0]['url']);
+
+    // The defaults need no key, and plain WebVTT subtitles are the default.
+    expect($token)->not->toContain('~mo=')
+        ->and(app(ManifestOptionsRegistry::class)->resolve($token)->subtitlesFormat)->toBe(SubtitleFormat::VTT);
+})->with([
+    'no body' => [[]],
+    'the default spelled out' => [['subtitlesFormat' => 'vtt']],
+]);
+
+it('names the options in the token as an opaque key, never as their values', function () {
+    $video = playVideo();
+    playOutput($video, heights: [360, 1080], formats: ['hls']);
+
+    $url = $this->postJson("/api/videos/{$video->ulid}/play", ['resolution' => 360, 'subtitlesFormat' => 'segments'])
+        ->json('data.sources.0.url');
+
+    // The token's fields, by name: an expiry, an ACL, the opaque key, a nonce and the signature.
+    // Nothing spells the options out — not as a field, and not in the query beside the token.
+    preg_match_all('/(?:^|~)([a-z]+)=/', linkToken($url), $fields);
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+    expect($fields[1])->toBe(['exp', 'acl', 'mo', 'n', 'hmac'])
+        ->and(array_keys($query))->toBe(['__hdnea__'])
+        ->and(linkToken($url))->toMatch('/~mo=[0-9a-f]{16}~n=[0-9a-f]{16}~hmac=/')
+        ->and($url)->not->toContain('segments')
+        ->and($url)->not->toContain('resolution');
+});
+
+it('names the options of a batch mint in every video\'s links', function () {
+    $first = playVideo();
+    $second = playVideo();
+    playOutput($first, formats: ['dash']);
+    playOutput($second, formats: ['dash']);
+
+    $data = $this->postJson('/api/videos/play', [
+        'videos' => [$first->ulid, $second->ulid],
+        'subtitlesFormat' => 'segments',
+    ])->assertOk()->json('data');
+
+    $registry = app(ManifestOptionsRegistry::class);
+
+    expect($registry->resolve(linkToken($data[0]['sources'][0]['url']))->subtitlesFormat)->toBe(SubtitleFormat::SEGMENTS)
+        ->and($registry->resolve(linkToken($data[1]['sources'][0]['url']))->subtitlesFormat)->toBe(SubtitleFormat::SEGMENTS);
+});
+
+it('refuses a subtitle format it does not know', function () {
+    $video = playVideo();
+    playOutput($video);
+
+    $this->postJson("/api/videos/{$video->ulid}/play", ['subtitlesFormat' => 'srt'])
+        ->assertStatus(422)->assertJsonValidationErrors('subtitlesFormat');
+});
+
+it('refuses manifest options when links are not signed', function (array $body, string $field) {
+    CdnSettings::fake(['token_secret' => '', 'token_window' => 3600]);
+
+    $video = playVideo();
+    playOutput($video, heights: [480, 720, 1080], formats: ['hls']);
+
+    // The options ride in the token: with none, the manifests would come out with the defaults
+    // whatever was asked, and the caller could not tell.
+    $this->postJson("/api/videos/{$video->ulid}/play", $body)
+        ->assertStatus(422)->assertJsonValidationErrors($field);
+})->with([
+    'a resolution cap' => [['resolution' => 720], 'resolution'],
+    'the packaged subtitles' => [['subtitlesFormat' => 'segments'], 'subtitlesFormat'],
+]);
+
+it('still mints unsigned links that ask for the defaults', function () {
+    CdnSettings::fake(['token_secret' => '', 'token_window' => 3600]);
+
+    $video = playVideo();
+    $output = playOutput($video, formats: ['hls']);
+
+    $sources = $this->postJson("/api/videos/{$video->ulid}/play", ['subtitlesFormat' => 'vtt'])->assertOk()->json('data.sources');
+
+    expect($sources[0]['url'])->toEndWith("{$output->ulid}.m3u8");
 });
 
 it('attributes every link in the answer to the tracking id', function () {

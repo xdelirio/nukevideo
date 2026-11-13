@@ -11,7 +11,7 @@ use App\Exceptions\NoCdnNodeAvailableException;
 use App\Models\Project;
 use App\Models\Stream;
 use App\Models\Video;
-use App\Services\Cdn\CdnProvider;
+use App\Services\Cdn\EdgeLinkSigner;
 use App\Services\Cdn\ProxyRing;
 use App\Services\Cdn\SignedLink;
 use App\Services\Cdn\TrackingRegistry;
@@ -42,7 +42,7 @@ class DownloadLinkService
     private const DOWNLOADABLE = ['video', 'audio', 'subtitle'];
 
     public function __construct(
-        private CdnProvider $cdn,
+        private EdgeLinkSigner $cdn,
         private TrackingRegistry $tracking,
     ) {}
 
@@ -182,7 +182,7 @@ class DownloadLinkService
     private function sign(Video $video, string $key, ?int $speedLimitKbps, int $lifetime): SignedLink
     {
         try {
-            return $this->cdn->downloadUrl($video->ulid, $key, app()->isLocal(), $speedLimitKbps, $lifetime);
+            return $this->cdn->downloadUrl($video->ulid, $key, $speedLimitKbps, $lifetime);
         } catch (NoCdnNodeAvailableException) {
             // Same answer playback gives ({@see VodLinkService}): the track
             // exists and the caller is entitled to it, there is just nothing to serve it right now.

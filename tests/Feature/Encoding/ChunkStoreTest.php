@@ -9,10 +9,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    CdnSettings::fake([
-        'provider' => 'self_hosted',
-        'providers' => ['self_hosted' => ['token_secret' => 'secret']],
-    ]);
+    CdnSettings::fake(['token_secret' => 'secret']);
 });
 
 function storeNode(array $attributes = []): Node

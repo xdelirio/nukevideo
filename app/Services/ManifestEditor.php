@@ -41,17 +41,17 @@ class ManifestEditor
      * (which only rewrites bodies of these types) stops signing segment URLs → players 403. Flysystem
      * would otherwise sniff `text/xml`/`text/plain`. Mirrors what `s5cmd sync` sets by extension.
      */
-    private const CONTENT_TYPES = [
+    public const CONTENT_TYPES = [
         'dash' => 'application/dash+xml',
         'hls' => 'application/vnd.apple.mpegurl',
     ];
 
     /**
-     * How long a CDN may keep a manifest. Manifests are edited in place after publishing — a track
-     * added, relabelled or removed — and a pull zone that falls back to a long default TTL keeps
+     * How long a cache may keep a manifest. Manifests are edited in place after publishing — a
+     * track added, relabelled or removed — and a cache that falls back to a long default TTL keeps
      * serving the old one: the new track invisible, a removed one pointing at deleted segments.
-     * The self-hosted edge ignores this and applies its own 30s ({@see vod/nginx}); Bunny honours
-     * it. Segments never change under their key, so they carry none.
+     * The edge ignores this and applies its own 30s ({@see vod/nginx}); it is there for anything
+     * else put in front of the bucket. Segments never change under their key, so they carry none.
      */
     public const MANIFEST_CACHE_CONTROL = 'public, max-age=30';
 

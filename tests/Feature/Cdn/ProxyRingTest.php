@@ -29,6 +29,9 @@ function ringProxy(array $attributes = []): Node
 /** A ring with nothing memoized yet — what a fresh request or job is handed. */
 function ring(): ProxyRing
 {
+    // The ring is scoped: forgetting the scope is the request boundary Octane and Horizon draw.
+    app()->forgetScopedInstances();
+
     return app(ProxyRing::class);
 }
 
@@ -36,10 +39,7 @@ beforeEach(function () {
     app()->detectEnvironment(fn () => 'production');
     // Production is served over HTTPS, which is the scheme every edge URL follows ({@see \App\Models\Node::proxyScheme}).
     config(['app.url' => 'https://api.example.com']);
-    CdnSettings::fake([
-        'provider' => 'self_hosted',
-        'providers' => ['self_hosted' => ['token_secret' => 'secret'], 'bunny' => []],
-    ]);
+    CdnSettings::fake(['token_secret' => 'secret']);
 });
 
 describe('the proxy ring', function () {
@@ -85,7 +85,7 @@ describe('the proxy ring', function () {
         expect($ring->for('01HZZZZZZZZZZZZZZZZZZZZZZZ'))->toBeNull();
 
         // The next request gets its own, and sees the node. Under php-fpm that boundary is the
-        // process; under Octane and Horizon it is the scoped CdnProvider being forgotten.
+        // process; under Octane and Horizon it is the scoped ring being forgotten.
         expect(ring()->for('01HZZZZZZZZZZZZZZZZZZZZZZZ'))->not->toBeNull();
     });
 
@@ -214,7 +214,7 @@ describe('nodes:probe', function () {
         expect($node->fresh()->health_failures)->toBe(1);
     });
 
-    it('leaves inactive nodes and the other provider alone', function () {
+    it('leaves inactive nodes alone', function () {
         $inactive = ringProxy(['is_active' => false, 'health_failures' => 2]);
         Http::fake();
 
@@ -222,10 +222,5 @@ describe('nodes:probe', function () {
 
         Http::assertNothingSent();
         expect($inactive->fresh()->health_failures)->toBe(2);
-
-        CdnSettings::fake(['provider' => 'bunny', 'providers' => ['self_hosted' => [], 'bunny' => ['host' => 'x']]]);
-        ringProxy();
-        $this->artisan('nodes:probe')->assertSuccessful();
-        Http::assertNothingSent();
     });
 });

@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\NodeController;
 use App\Models\Node;
 use App\Services\DockerService;
+use App\Services\ProxyCacheService;
 use App\Settings\AppSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -47,6 +48,25 @@ describe('deleting a node', function () {
         expect($removed)->toBe(["nukevideo_worker_{$node->id}", "nukevideo_storage_{$node->id}"])
             ->and(Node::find($node->id))->toBeNull()
             ->and(Node::find($other->id))->not->toBeNull();
+    });
+
+    it('removes a proxy\'s fallback cache volume with it', function () {
+        // The volume is the node's alone and nothing else reclaims it. A typo (`$docker` for
+        // `$this->docker`) made this throw into a catch-all for as long as it had existed.
+        $node = lifecycleNode(['type' => 'proxy', 'hostname' => 'edge.example.com']);
+
+        $volumes = [];
+        $docker = Mockery::mock(DockerService::class);
+        $docker->shouldReceive('listContainers')->andReturn([]);
+        $docker->shouldReceive('removeVolume')->once()->andReturnUsing(function ($n, $name) use (&$volumes) {
+            $volumes[] = $name;
+        });
+        app()->instance(DockerService::class, $docker);
+
+        app(NodeController::class)->destroy((string) $node->id);
+
+        expect($volumes)->toBe([ProxyCacheService::volumeFor($node)])
+            ->and(Node::find($node->id))->toBeNull();
     });
 
     it('does not take a container whose name it is merely a prefix of', function () {

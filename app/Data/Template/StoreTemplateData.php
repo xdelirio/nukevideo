@@ -30,9 +30,11 @@ class StoreTemplateData extends RequestData
             'enabled' => 'sometimes|boolean',
             'keepProcessedFiles' => 'sometimes|boolean',
             'keepOriginal' => 'sometimes|boolean',
-            'query.outputs' => 'required|array|min:1',
+            // Bounded: every output is a ladder of its own and every variant a rendition, each
+            // encoded window by window, so one upload costs outputs × variants × windows jobs.
+            'query.outputs' => 'required|array|min:1|max:10',
             'query.outputs.*.video_codec' => ['required', 'string', new TemplateVideoCodecRule],
-            'query.outputs.*.variants' => 'required|array|min:1',
+            'query.outputs.*.variants' => 'required|array|min:1|max:20',
             'query.outputs.*.variants.*' => new TemplateFormatRule,
             'query.outputs.*.audio' => ['required', 'array', new TemplateAudioRule],
         ];

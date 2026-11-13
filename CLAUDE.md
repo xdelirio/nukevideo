@@ -214,8 +214,7 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
 - Everything a deploy names is prefixed `nukevideo_dev_` in local and `nukevideo_` otherwise
   (`Node::containerPrefix()`). Both environments number their nodes from their own database, so
   without that a dev deploy would replace the production containers on the same host. Vector is
-  deployed **only on proxy nodes with the self-hosted CDN** — nothing else produces the access-log
-  lines it ships, and Bunny is covered by `bunny:ingest-logs`.
+  deployed **only on proxy nodes** — nothing else produces the access-log lines it ships.
 - Retrying a video takes more than `status = pending`: delete its `job_batches` row first (the
   chunks survive, so the retry is a cache hit).
 - **`Project` extends `Model`, not `Authenticatable`.** A project API key authenticates *as the
@@ -223,6 +222,31 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
   comes from a different sequence than a user's, so reading it as a user id silently answers with
   another account's data — use `$request->user()->accountId()`, which both models implement.
   `is_admin` needs nothing: the attribute is simply absent on a Project, so Eloquent answers null.
+- Master manifests are not served from the bucket: the edge asks `GET internal/manifests/{video}/{file}`
+  and `DynamicManifestService` builds them from the options the link's token names: an opaque
+  `mo` key signed into the token, resolved by `ManifestOptionsRegistry` to a `ManifestOptions`.
+  The key must stay IN the token — tokens are not unique per mint, so anything merely filed under
+  one would cross between viewers. A new personalization is one `ManifestTransformer`
+  plus one option property — no edge change. The edge caches what the endpoint answers for
+  30 s under `{path}|{mo}`, so the answer must stay viewer-agnostic — one built copy serves every
+  link with equal options — and the endpoint itself caches nothing and touches no database. The
+  manifest file-name pattern is the same in the route, the edge's `map` and its `:8081` location
+  (a test pins it): the name is written into the edge's request to the API, and a looser pattern
+  was a header injection. When the API is unreachable the edge falls back to the
+  static manifest, so nothing built here may be an entitlement yet.
+- A minted token is never the same twice: `EdgeLinkSigner::sign` adds a random `n` field. Whatever
+  is recorded against a token (`TrackingRegistry`: the tracking id, the download mark) is keyed by
+  its hash, and without the nonce two viewers minting one video in the same second shared a token
+  and each other's records. The edge's validator ignores and signs fields it does not know, which
+  is what `limit`, `mo` and `n` all rely on.
+- The edge meters only `200`/`206` (`access_log … if=$billable`). The usage line books bytes to the
+  video named in the request PATH, which needs no token to choose.
+- Every value the edge container is given is checked in `vod/entrypoint.sh` (`require`/`tunable`)
+  before it is rendered into nginx config; a test fails for a variable in `NodeService::EDGE_ENV`
+  that is not. Part of a node's env is free text from the panel, and unchecked it is nginx config.
+- Analytics without project context are pinned to the caller's account as soon as they name videos
+  or tracking ids (`MetricsController::accountScope`, `AnalyticsController`). "The caller named it"
+  proves nothing: a video ULID is public and a tracking id is free text two tenants share.
 - Metrics live in MariaDB, in `usage_daily`: one row per day per combination of dimensions, and
   the unique key over those dimensions IS the aggregation. Every write goes through
   `UsageService::add()`, which upserts `value = value + new`; a plain insert or an Eloquent

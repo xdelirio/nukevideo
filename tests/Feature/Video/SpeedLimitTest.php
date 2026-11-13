@@ -83,16 +83,9 @@ function edgeAccepts(string $token): bool
     return hash_equals(hash_hmac('sha256', $signed, 'secret'), $hmac);
 }
 
-/** The secret signs whichever provider is active: the edge's HMAC key, or Bunny's token key. */
-function fakeSpeedLimitCdn(string $provider = 'self_hosted', string $secret = 'secret'): void
+function fakeSpeedLimitCdn(string $secret = 'secret'): void
 {
-    CdnSettings::fake([
-        'provider' => $provider,
-        'providers' => [
-            'self_hosted' => ['token_secret' => $secret === '' ? '' : bin2hex($secret), 'token_window' => 3600],
-            'bunny' => ['host' => 'cdn.example.com', 'token_key' => $secret, 'token_window' => 3600],
-        ],
-    ]);
+    CdnSettings::fake(['token_secret' => $secret === '' ? '' : bin2hex($secret), 'token_window' => 3600]);
 }
 
 beforeEach(function () {
@@ -187,8 +180,8 @@ it('validates the limit', function (mixed $value) {
     'not a number' => 'fast',
 ]);
 
-it('refuses a limit the active CDN cannot enforce instead of minting without it', function (string $provider, string $secret) {
-    fakeSpeedLimitCdn($provider, $secret);
+it('refuses a limit an unsigned edge cannot enforce instead of minting without it', function () {
+    fakeSpeedLimitCdn('');
     $video = speedLimitedVideo();
     $track = speedLimitedTrack($video);
 
@@ -199,24 +192,6 @@ it('refuses a limit the active CDN cannot enforce instead of minting without it'
     $this->postJson("/api/streams/{$track->ulid}/download", ['speedLimitKbps' => 3000])
         ->assertStatus(422)->assertJsonValidationErrors('speedLimitKbps');
 
-    // Without a limit the same provider mints as before.
+    // Without a limit the same edge mints as before.
     $this->postJson("/api/videos/{$video->ulid}/play")->assertOk();
-})->with([
-    'an unsigned Bunny zone' => ['bunny', ''],
-    'an unsigned edge' => ['self_hosted', ''],
-]);
-
-it('signs Bunny\'s own limit, in kB/s, into a playback and a download link', function () {
-    fakeSpeedLimitCdn('bunny');
-    $video = speedLimitedVideo();
-    $track = speedLimitedTrack($video);
-
-    $play = $this->postJson("/api/videos/{$video->ulid}/play", ['speedLimitKbps' => 3000])
-        ->assertOk()->json('data.sources.0.url');
-    $download = $this->postJson("/api/streams/{$track->ulid}/download", ['speedLimitKbps' => 8000])
-        ->assertOk()->json('data.url');
-
-    // Directory mode: the limit rides the `/bcdn_token=…` prefix, which the segments inherit.
-    expect($play)->toMatch('#^https://cdn\.example\.com/bcdn_token=HS256-[^&]+&limit=375&token_path=[^&]+&expires=\d+/#')
-        ->and($download)->toMatch('#\?token=HS256-[^&]+&limit=1000&expires=\d+$#');
 });

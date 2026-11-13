@@ -108,6 +108,25 @@ it('treats an empty trackingId as a filter for unattributed traffic', function (
     expect($seen->getArrayCopy())->toHaveCount(count(BANDWIDTH_QUERIES))->each->toBe([null, '', null]);
 });
 
+it('refuses a video or tracking id filter with no project to read it inside', function (string $path, string $filter, string $field) {
+    // Without a project the totals are instance-wide and name nobody. With a filter they become
+    // one video's bytes, viewer count and daily curve — and a video's ULID is public, so any
+    // account could read another's.
+    $this->withHeader('X-Project-Ulid', '')
+        ->getJson("/api/{$path}?from=2026-01-01&to=2026-01-31&{$filter}")
+        ->assertStatus(422)->assertJsonValidationErrors($field);
+})->with([
+    ['analytics', 'video='.VIDEO_ULID, 'video'],
+    ['analytics/summary', 'video='.VIDEO_ULID, 'video'],
+    ['analytics/bandwidth', 'video='.VIDEO_ULID, 'video'],
+    ['analytics/summary', 'trackingId=customer-42', 'trackingId'],
+    ['analytics/bandwidth', 'trackingId=', 'trackingId'],
+]);
+
+it('still answers the unfiltered totals with no project', function (string $path) {
+    $this->withHeader('X-Project-Ulid', '')->getJson("/api/{$path}?from=2026-01-01&to=2026-01-31")->assertOk();
+})->with(['analytics', 'analytics/summary', 'analytics/bandwidth']);
+
 it('rejects a filter that could not have come out of the log columns', function (string $query) {
     $this->getJson("/api/analytics?from=2026-01-01&to=2026-01-31&{$query}")->assertStatus(422);
 })->with([

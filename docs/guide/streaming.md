@@ -18,15 +18,15 @@ Subtitles are packaged separately for each protocol — fragmented-MP4 WebVTT fo
 The packaged segments and manifests live on S3. A delivery layer sits in front of the bucket to enforce access control and cache segments close to viewers:
 
 ```
-Client → Delivery (proxy node or Bunny CDN) → S3 (CMAF) → Client
+Client → Delivery (proxy node) → S3 (CMAF) → Client
 ```
 
 1. The client requests a manifest with a signed token.
 2. The delivery layer validates the token.
 3. The manifest is served, then the client fetches the CMAF segments it references.
-4. Segments are cached at the edge; manifests for 30 seconds, so an update is picked up within half a minute.
+4. Segments are cached at the edge. The master manifest is built by the API for the link it was requested with (see [Per-link manifests](#per-link-manifests)); an update to a video's tracks is picked up within half a minute.
 
-There are two delivery paths — self-hosted **proxy nodes** or **Bunny CDN**. Both serve the same static CMAF from S3; only the front door differs. See [CDN & Delivery](/guide/cdn) for the full comparison and setup.
+The delivery layer is a set of self-hosted **proxy nodes**. See [CDN & Delivery](/guide/cdn) for how they work and how to set them up.
 
 ## Requesting a Playback URL
 
@@ -37,8 +37,7 @@ one serves:
 POST /api/videos/{ulid}/play
 ```
 
-The URLs point at whichever delivery layer is configured (a proxy node host or the Bunny pull-zone
-host) and carry the access token. The answer is a flat list of `sources`: one entry per output and
+The URLs point at a proxy node host and carry the access token. The answer is a flat list of `sources`: one entry per output and
 format, each carrying its `format`, its `videoCodec` and its `audioCodec`, so you can rule one out
 before loading it. A manifest that cannot be served is absent. Full shape in
 [Playback URLs](/api/videos#playback-urls).
@@ -52,7 +51,7 @@ unattributed.
 | Field | Type | Notes |
 |-------|------|-------|
 | `resolution` | integer | Caps every output's ladder at this height. Nothing else in the body selects what comes back — every format each output serves is in the answer. |
-| `ip` | string | The viewer's address, when the link is minted from your backend; defaults to the caller's. Enforced only on self-hosted delivery with [IP binding](/guide/cdn#ip-binding) turned on: the link then plays from that address alone, so a backend that omits it binds the link to itself. Bunny tokens are never IP-bound. |
+| `ip` | string | The viewer's address, when the link is minted from your backend; defaults to the caller's. Enforced only with [IP binding](/guide/cdn#ip-binding) turned on: the link then plays from that address alone, so a backend that omits it binds the link to itself. |
 | `speedLimitKbps` | integer | Caps the transfer rate of every request the link produces, in kilobits per second. See [Speed limits](#speed-limits). |
 | `trackingId` | string | Your own tracking id for this viewer — a customer, a campaign. It never appears in the link: the mint records the link's token against your id server-side, so every request the link produces — the manifest, each segment — is attributed to it in the [bandwidth analytics](/api/analytics#bandwidth-by-tracking-id) when the CDN log is ingested. Up to 64 characters of `A-Z a-z 0-9 _ -`. The mapping is best-effort (it lives server-side, for the token's lifetime plus a margin). When omitted on a session or personal-token request the traffic is attributed to the ULID of the authenticated user — the admin panel's own playback stays attributed that way. A project key that omits it leaves the traffic unattributed: naming the viewer is the integrator's job. |
 
@@ -64,12 +63,9 @@ it — and it is minted by the API with the provider's **token window** (one hou
 the `expiresIn` the request asked for, up to a week. The segments do not get a window of their own:
 they expire with the link, so a session that outlives it has to request a fresh link.
 
-The exact signing scheme depends on the delivery layer:
+Proxy nodes validate Akamai-style tokens (HMAC) scoped to the manifest's directory, rewrite the manifest so its segment URLs carry that same token, and read the segments from S3 using AWS authentication.
 
-- **Proxy nodes** validate Akamai-style tokens (HMAC) scoped to the manifest's directory, rewrite the manifest so its segment URLs carry that same token, and read the segments from S3 using AWS authentication.
-- **Bunny CDN** uses HMAC-SHA256 tokens in directory mode: the token is a path prefix scoped to the video's directory, so the manifest and all of its relative segments authenticate under one token.
-
-Either way the token is what ties a session's traffic back to the link that was minted, which is
+The token is what ties a session's traffic back to the link that was minted, which is
 how a `trackingId` is attributed without ever appearing in the URL.
 
 ## Speed limits
@@ -84,24 +80,48 @@ The limit is part of the signature, not a parameter next to it, so a viewer who 
 it gets a 403 rather than a faster link. Because the segments carry the manifest's token, one
 capped playback link caps the whole session.
 
-- **Proxy nodes** carry it as a `limit` field of the token, in bytes per second, which the edge reads back once the
-  HMAC has passed and applies to the response.
-- **Bunny CDN** gets its own [`limit` parameter](https://bunny.net/docs/cdn/security/token-authentication/advanced#speed-limits),
-  signed with the token. Bunny counts it in kB/s, so the API divides by 8 (never below `1`,
-  since `0` means "no limit" to Bunny).
+It rides as a `limit` field of the token, in bytes per second, which the edge reads back once the
+HMAC has passed and applies to the response.
 
 It is enforced **per request**. A player fetching two segments at once, or a download manager
 opening four ranged connections, gets the limit on each of them — it caps a connection, not a
 viewer.
 
-A limit needs a signed link: with no token secret (proxy nodes) or no token key (Bunny) there is
+A limit needs a signed link: with no token secret there is
 nothing to sign it into, and the mint answers `422` rather than a link without the cap. A proxy
 node still running an older edge validates the token and serves it unlimited: redeploy the node
 to enforce it.
 
+## Per-link manifests
+
+A master manifest (`{output}.mpd`, `{output}.m3u8`) is not served as the file the packager wrote.
+The edge validates the link's token and then asks the API for the manifest, and the API builds it
+from what that link asked for when it was minted:
+
+| Option | Effect |
+|--------|--------|
+| `resolution` | Video renditions above the cap are left out. |
+| `subtitlesFormat` | DASH text tracks point at plain `.vtt` files by default; `segments` keeps the packaged fragmented-MP4 WebVTT. |
+
+The options are never in the URL. The link's token carries an opaque key for them, signed like
+the rest of the token, and the edge hands the token back when it asks — so a viewer cannot change
+them, and two viewers of the same video can be given different manifests from the same path. A link
+minted without options gets the defaults: the full ladder, and subtitles as plain `.vtt`.
+
+Only the master manifest takes this path. HLS media playlists and every segment are the same
+bytes for every viewer, and keep going from the edge's cache or straight from the bucket.
+
+**If the API does not answer with a manifest** — it is down, slow, overloaded, or the edge has
+asked too much of it — the edge serves the packaged manifest from the bucket instead: the viewer
+plays, without the personalization — the full ladder, and DASH subtitles in their packaged form.
+The response header `X-Manifest-Source` says which of the two answered (`api` or `bucket`). That is the right trade while the options are
+preferences — what a device can play, how a player wants its subtitles. It also means an option
+here **hides** a rendition, it does not lock it: the link's token still authorizes the whole
+playback directory.
+
 ## Caching
 
-The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Manifests** are cached for 30 seconds: the cache keeps the bucket's copy and the edge writes each viewer's token into it on the way out, so a playback start skips the trip to S3 and still gets a token of its own. Manifests and subtitle cues are served gzip-compressed. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks).
+The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Master manifests** are built by the API and cached at the edge for 30 seconds, one copy per manifest and set of options, shared by every viewer who asked for the same thing — so the API is asked once per half minute, not once per playback start — and the edge writes each viewer's token into the copy on the way out. HLS media playlists are cached at the edge for 30 seconds, as before. Manifests and subtitle cues are served gzip-compressed. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks).
 
 ## Bandwidth Monitoring
 

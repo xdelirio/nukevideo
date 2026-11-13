@@ -28,13 +28,6 @@ sshFingerprint: string | null,
 cloudflareConfigured: boolean,
 cloudflareProxied: boolean,
 };
-export type BunnyConfigData = {
-host: string,
-tokenKey: string,
-tokenWindow: number,
-apiKey: string,
-pullZoneId: string,
-};
 export type CacheDiskData = {
 device: string,
 size: number,
@@ -45,9 +38,12 @@ free: number,
 fast: boolean,
 };
 export type CdnSettingsData = {
-provider: App.Enums.CdnDriver,
-selfHosted: App.Data.SelfHostedConfigData,
-bunny: App.Data.BunnyConfigData,
+tokenSecret: string,
+tokenName: string,
+tokenWindow: number,
+bindIp: boolean,
+allowedDomains: string[],
+allowNullOrigin: boolean,
 edgeS3: App.Data.EdgeS3Data,
 };
 export type DownloadLinkData = {
@@ -107,14 +103,6 @@ storage: App.Data.StorageData,
 byStatus: App.Data.StatusStorageData[],
 };
 export type RequestData = object;
-export type SelfHostedConfigData = {
-tokenSecret: string,
-tokenName: string,
-tokenWindow: number,
-bindIp: boolean,
-allowedDomains: string[],
-allowNullOrigin: boolean,
-};
 export type ServiceStatusData = {
 name: string,
 running: number,
@@ -588,6 +576,10 @@ sort: string,
 direction: string,
 perPage: number,
 };
+export type ManifestOptions = {
+resolution: number | null,
+subtitlesFormat: App.Enums.SubtitleFormat,
+};
 export type PlayVideoData = {
 resolution: number | null,
 ip: string | null,
@@ -595,6 +587,7 @@ trackingId: string | null,
 speedLimitKbps: number | null,
 download: boolean | null,
 expiresIn: number | null,
+subtitlesFormat: App.Enums.SubtitleFormat | null,
 };
 export type PlayVideosData = {
 videos: string[],
@@ -604,6 +597,7 @@ trackingId: string | null,
 speedLimitKbps: number | null,
 download: boolean | null,
 expiresIn: number | null,
+subtitlesFormat: App.Enums.SubtitleFormat | null,
 };
 export type UpdateVideoData = {
 name: string,
@@ -614,7 +608,6 @@ priority?: App.Enums.VideoPriority,
 }
 }
 namespace Enums {
-export type CdnDriver = 'self_hosted' | 'bunny';
 export type DownloadSkipReason = 'not_retained' | 'not_downloadable' | 'not_found';
 export type MetricDimension = 'date' | 'metric' | 'tracking_id' | 'video' | 'external_user_id' | 'ip' | 'country' | 'node_id' | 'cache';
 export type MetricMeasure = 'value' | 'requests' | 'unique_ips' | 'unique_tracking_ids';
@@ -624,6 +617,7 @@ export type NodeAccel = 'intel' | 'nvidia';
 export type NodeAction = 'deploy' | 'start' | 'stop';
 export type NodeType = 'worker' | 'proxy';
 export type StreamStatus = 'processing' | 'ready' | 'failed';
+export type SubtitleFormat = 'segments' | 'vtt';
 export type UsageGranularity = 'total' | 'daily';
 export type UsageMetric = 'upload_bytes' | 'encoding_cpu' | 'streaming_bytes' | 'download_bytes' | 'asset_bytes' | 'bandwidth_bytes' | 'origin_bytes';
 export type VideoPriority = 'low' | 'normal' | 'high';

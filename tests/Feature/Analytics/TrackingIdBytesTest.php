@@ -82,7 +82,7 @@ it('passes the range, the whole list and the metric into the query', function ()
     $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=a&trackingIds[]=b&metric=download_bytes')
         ->assertOk();
 
-    expect($seen['args'])->toBe(['2026-04-01', '2026-04-30', ['a', 'b'], 'download_bytes', false]);
+    expect(array_slice($seen['args'], 0, 5))->toBe(['2026-04-01', '2026-04-30', ['a', 'b'], 'download_bytes', false]);
 });
 
 it('omits ids with no traffic rather than answering with zeros', function () {
@@ -110,13 +110,12 @@ it('accepts the same batch in a POST body', function () {
         'trackingIds' => ['a', 'b'],
     ])->assertOk();
 
-    expect($seen['args'])->toBe(['2026-04-01', '2026-04-30', ['a', 'b'], null, false]);
+    expect(array_slice($seen['args'], 0, 5))->toBe(['2026-04-01', '2026-04-30', ['a', 'b'], null, false]);
 });
 
 it('lets a project API key read a batch', function () {
     // The whole point: this is consumed server to server by the backend that minted the ids, which
-    // holds a project key and not a user session. The action reads no `$request->user()`, which
-    // for a project key is a Project and not a User.
+    // holds a project key and not a user session.
     stubBatchService();
     $project = Project::factory()->for(User::factory()->create(['is_admin' => false]))->create();
     $key = app(ApiTokenService::class)->regenerateProjectKey($project)->plainTextToken;
@@ -124,6 +123,33 @@ it('lets a project API key read a batch', function () {
     $this->withToken($key)
         ->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=customer-42')
         ->assertOk();
+});
+
+it('reads a batch inside the caller\'s own account', function () {
+    // A tracking id is the integrator's own text, usually its subscriber id, so two tenants both
+    // have a `42`. Instance-wide, each read the other's bytes under it and billed them as its own.
+    $owner = User::factory()->create(['is_admin' => false]);
+
+    $seen = stubBatchService();
+    Sanctum::actingAs($owner);
+    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=42')->assertOk();
+
+    // The project argument stays empty, the account one carries the caller.
+    expect($seen['args'][5])->toBeNull()->and($seen['args'][6])->toBe($owner->id);
+});
+
+it('reads a project key\'s batch inside the account that owns the project', function () {
+    // A project key authenticates as a Project, whose own id is from another sequence than a
+    // user's: the account is the project's owner.
+    User::factory()->count(3)->create();
+    $owner = User::factory()->create(['is_admin' => false]);
+    $project = Project::factory()->for($owner)->create();
+    $key = app(ApiTokenService::class)->regenerateProjectKey($project)->plainTextToken;
+
+    $seen = stubBatchService();
+    $this->withToken($key)->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=42')->assertOk();
+
+    expect($seen['args'][6])->toBe($owner->id)->not->toBe($project->id);
 });
 
 it('still refuses a batch to an unauthenticated caller', function () {

@@ -121,6 +121,7 @@ class VideoController extends Controller
                 $data->speedLimitKbps,
                 $data->download ?? false,
                 $data->expiresIn,
+                $data->subtitlesFormat,
             ),
         ]);
     }
@@ -147,6 +148,7 @@ class VideoController extends Controller
                 $data->speedLimitKbps,
                 $data->download ?? false,
                 $data->expiresIn,
+                $data->subtitlesFormat,
             ),
         ]);
     }

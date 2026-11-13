@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\UsageController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BandwidthController;
+use App\Http\Controllers\ManifestController;
 use App\Http\Controllers\MeController;
 use App\Http\Controllers\MyCustomUppyController;
 use App\Http\Controllers\ProjectApiKeyController;
@@ -220,6 +221,15 @@ Route::post('webhooks/video-uploaded', [VideoWebhookController::class, 'handle']
 
 // Bandwidth ingest (Vector -> queue -> usage_daily)
 Route::post('internal/bandwidth', [BandwidthController::class, 'ingest'])
+    ->middleware(VerifyInternalSecret::class);
+
+// Master manifests, built per link (edge -> API). Only the edge asks: a player's request reaches
+// it first, and it comes here once the token has validated. The patterns are the whole path
+// check — a video ULID and a manifest file name with no separator in it — so nothing outside a
+// video's play zone can be named.
+Route::get('internal/manifests/{video}/{file}', [ManifestController::class, 'show'])
+    ->where('video', '[0-9A-Za-z]{26}')
+    ->where('file', '[0-9A-Za-z]+(\.[0-9]+)?\.(mpd|m3u8)')
     ->middleware(VerifyInternalSecret::class);
 
 Route::get('/videos/{ulid}/{filename}', [VideoController::class, 'getAsset'])

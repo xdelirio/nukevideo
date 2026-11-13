@@ -3,6 +3,7 @@
 namespace App\Data\Video;
 
 use App\Data\RequestData;
+use App\Enums\SubtitleFormat;
 use App\Support\LinkExpiry;
 use App\Support\SpeedLimit;
 use App\Support\TrackingId;
@@ -39,6 +40,14 @@ class PlayVideosData extends RequestData
         public ?bool $download = null,
         #[MapInputName(CamelCaseMapper::class)]
         public ?int $expiresIn = null,
+        /**
+         * How the DASH manifests of this answer carry their subtitles ({@see SubtitleFormat}).
+         * Omitted is `vtt`: each text track points at one plain `.vtt` file. `segments` asks for
+         * the packaged fragmented-MP4 form instead. Never part of a URL: it is filed under the
+         * links' tokens and applied when a manifest is requested.
+         */
+        #[MapInputName(CamelCaseMapper::class)]
+        public ?SubtitleFormat $subtitlesFormat = null,
     ) {}
 
     /** One key per field, as {@see PlayVideoData::rules()}. */

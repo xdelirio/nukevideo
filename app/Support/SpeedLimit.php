@@ -2,9 +2,7 @@
 
 namespace App\Support;
 
-use App\Services\Cdn\BunnyProvider;
-use App\Services\Cdn\CdnProvider;
-use App\Services\Cdn\SelfHostedProvider;
+use App\Services\Cdn\EdgeLinkSigner;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -14,10 +12,9 @@ use Illuminate\Validation\ValidationException;
  * playback can compare the two directly — a 3000 kbps limit is what keeps the ladder below the
  * 1080p rung. Downloads use the same unit rather than a second one: divide by 8 for kB/s.
  *
- * The limit lives INSIDE the signature, never next to it: a `limit` field of the self-hosted token
- * ({@see SelfHostedProvider::sign}), Bunny's signed `limit` parameter ({@see BunnyProvider}).
- * Anything outside the HMAC is the viewer's to edit, and a cap the viewer can delete from the URL
- * is not one.
+ * The limit lives INSIDE the signature, never next to it: a `limit` field of the edge's token
+ * ({@see EdgeLinkSigner::sign}). Anything outside the HMAC is the viewer's to edit, and a cap
+ * the viewer can delete from the URL is not one.
  */
 class SpeedLimit
 {
@@ -45,22 +42,16 @@ class SpeedLimit
         return intdiv($kbps * 1000, 8);
     }
 
-    /** What Bunny's `limit` token parameter takes: kB/s. */
-    public static function toKilobytesPerSecond(int $kbps): int
-    {
-        return intdiv($kbps, 8);
-    }
-
     /**
-     * Refuse a limit the active CDN cannot enforce, before anything is minted.
+     * Refuse a limit the edge cannot enforce, before anything is minted.
      *
      * A 422 rather than a link without the cap: the caller asked for a limit because something
      * depends on it — a plan tier, a bandwidth budget — and a link that silently ignores it is
      * the one answer they cannot detect.
      */
-    public static function ensureSupported(CdnProvider $cdn, ?int $kbps): void
+    public static function ensureSupported(EdgeLinkSigner $cdn, ?int $kbps): void
     {
-        if ($kbps !== null && ! $cdn->supportsSpeedLimit()) {
+        if ($kbps !== null && ! $cdn->signs()) {
             throw ValidationException::withMessages([
                 'speedLimitKbps' => 'The active CDN cannot enforce a speed limit on its links.',
             ]);
