@@ -165,3 +165,34 @@ it('refuses what is not a bare hostname', function (string $domain) use ($settin
     'a wildcard mid-name' => 'foo.*.example.com',
     'something aimed at the nginx config' => 'example.com" 0; } #',
 ]);
+
+/**
+ * The token secret and the edge's S3 keys are written into the edge's nginx config as they stand.
+ * Anything nginx reads as syntax in one of them is a line of config — or a config that does not
+ * load, which is every proxy crashlooping at its next deploy, after the old container is gone.
+ */
+it('refuses a token secret that is not hex', function (string $secret) use ($settings) {
+    $this->patchJson('/api/cdn-settings', $settings(['tokenSecret' => $secret]))
+        ->assertStatus(422)->assertJsonValidationErrors('tokenSecret');
+
+    expect(app(CdnSettings::class)->token_secret)->toBe('secret');
+})->with([
+    'a directive' => '00; proxy_cache off',
+    'a space' => 'ab cd',
+    'not hex' => 'not-hex-at-all',
+    'half a byte' => 'abc',
+]);
+
+it('accepts a hex token secret', function () use ($settings) {
+    $this->patchJson('/api/cdn-settings', $settings(['tokenSecret' => 'A1b2C3d4e5F60718']))->assertOk();
+
+    expect(app(CdnSettings::class)->token_secret)->toBe('A1b2C3d4e5F60718');
+});
+
+it('refuses edge S3 keys that carry config syntax', function (array $edgeS3) use ($settings) {
+    $this->patchJson('/api/cdn-settings', [...$settings(), 'edgeS3' => $edgeS3])->assertStatus(422);
+})->with([
+    'a semicolon in the key' => [['accessKeyId' => 'edge;key', 'secretAccessKey' => 'edge-secret']],
+    'a brace in the secret' => [['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge{secret}']],
+    'a variable in the secret' => [['accessKeyId' => 'edge-key', 'secretAccessKey' => 'edge$secret']],
+]);

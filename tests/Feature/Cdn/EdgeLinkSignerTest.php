@@ -189,7 +189,7 @@ describe('the address signed into a playback link', function () {
 
         // nginx renders $remote_addr compressed and lowercase, and its IPv4 listener never sees
         // a mapped address: with binding on, anything else was a 403 for the very viewer it named.
-        expect($link->token)->toContain("~ip={$signed}~hmac=");
+        expect($link->token)->toMatch('/~ip='.preg_quote($signed, '/').'~n=[0-9a-f]{16}~hmac=/');
     })->with([
         'IPv4 as given' => ['203.0.113.7', '203.0.113.7'],
         'IPv6 expanded and uppercase' => ['2001:DB8:0:0:0:0:0:1', '2001:db8::1'],

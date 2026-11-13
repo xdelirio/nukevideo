@@ -14,6 +14,7 @@ use App\Services\CreateVideoStreamsService;
 use App\Services\PerTitleCrfService;
 use App\Services\QualityBitrateProbe;
 use App\Services\RenditionPreflight;
+use App\Support\MediaSource;
 use App\Support\PrepClaim;
 use App\Support\PrimaryStore;
 use Illuminate\Bus\Queueable;
@@ -449,7 +450,7 @@ class PrepareVideoJob implements ShouldQueue
             throw new RuntimeException($process->errorOutput());
         }
 
-        $plan = $planner->plan($video, $process->output(), (float) $video->duration);
+        $plan = $planner->plan($video, $process->output(), (float) $video->duration, MediaSource::startTime($localPath));
         $context = ['video' => $this->videoId] + $plan->context();
 
         // Said here or not at all: when a chunk overruns the per-chunk timeout, the first question

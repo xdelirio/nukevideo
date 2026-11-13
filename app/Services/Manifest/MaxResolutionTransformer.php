@@ -27,7 +27,7 @@ class MaxResolutionTransformer implements ManifestTransformer
         return $options->resolution !== null;
     }
 
-    public function transform(string $body, string $format, ManifestOptions $options): string
+    public function transform(string $body, string $format, string $videoUlid, ManifestOptions $options): string
     {
         if ($options->resolution === null) {
             return $body;
@@ -150,9 +150,17 @@ class MaxResolutionTransformer implements ManifestTransformer
             if (($isVariant || $isIframe) && ($short = $this->hlsShortEdge($line)) !== null && $short > $limit) {
                 $changed = true;
 
-                // A variant's URI is the next line; an I-frame playlist names its own inline.
+                // A variant's URI is the next line that is neither blank nor a tag — the very next
+                // one as the packager writes it, but nothing in HLS says so. An I-frame playlist
+                // names its own inline.
                 if ($isVariant) {
-                    $i++;
+                    while (isset($lines[$i + 1])) {
+                        $next = trim($lines[++$i]);
+
+                        if ($next !== '' && $next[0] !== '#') {
+                            break;
+                        }
+                    }
                 }
 
                 continue;

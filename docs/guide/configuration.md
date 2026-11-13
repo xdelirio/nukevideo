@@ -153,7 +153,7 @@ Everything here is applied when the container is created, so a change takes effe
 
 ### Proxy Nodes
 
-Proxy containers receive only what they read: `NODE_ID`, the [S3 Storage](#s3-storage) credentials, bucket, region and endpoint (to read packaged CMAF from the bucket), the token settings from [Proxy Node Delivery](#proxy-node-delivery), which are sourced from the CDN Settings panel, and the tuning below. Any other variable stays out of them, wherever it is set, including database and Redis credentials, `APP_KEY` and the webhook and internal secrets.
+Proxy containers receive only what they read: `NODE_ID`, the [S3 Storage](#s3-storage) credentials, bucket, region and endpoint (to read packaged CMAF from the bucket), the token settings from [Proxy Node Delivery](#proxy-node-delivery), which are sourced from the CDN Settings panel, and the tuning below. Any other variable stays out of them, wherever it is set, including database and Redis credentials, `APP_KEY` and the webhook secret. The one exception is `INTERNAL_API_URL` and `INTERNAL_API_SECRET`, which the edge needs to ask the API for master manifests.
 
 They sign with the main S3 key unless **CDN Settings** holds a key for the proxies, which is the better setup: they only ever read, so give them a key limited to `s3:GetObject` on the bucket, and one leaked from a proxy cannot delete or rewrite anything. Workers keep the main key. The secret is never returned by the API. A change applies when the proxy nodes are redeployed, and a key that cannot read the bucket fails every cache miss with a `403`, so try it on one proxy first.
 

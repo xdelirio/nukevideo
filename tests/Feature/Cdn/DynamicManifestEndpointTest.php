@@ -69,7 +69,7 @@ it('refuses anyone who is not the edge', function () {
 it('answers with the defaults for a link that asked for nothing', function (?string $token) {
     // Plain WebVTT is what a link gets without asking.
     expect(askManifest(MANIFEST_OUTPUT.'.mpd', $token)->assertOk()->getContent())
-        ->toContain('<BaseURL>'.MANIFEST_SUB.'/sub.vtt</BaseURL>')
+        ->toContain('<BaseURL>/'.MANIFEST_VIDEO.'/play/'.MANIFEST_SUB.'/sub.vtt</BaseURL>')
         ->not->toContain('wvtt');
 })->with([
     'no token header' => [null],
@@ -126,54 +126,41 @@ it('cannot be pointed outside a video play zone', function (string $path) {
     'short/'.MANIFEST_OUTPUT.'.mpd',
 ]);
 
-it('reads the bucket once for the requests of the same half minute', function () {
-    askManifest(MANIFEST_OUTPUT.'.mpd')->assertOk();
-
-    // Gone from the bucket, still answered: the copy read a moment ago is the one served.
-    Storage::disk('s3')->delete(MANIFEST_VIDEO.'/play/'.MANIFEST_OUTPUT.'.mpd');
-    askManifest(MANIFEST_OUTPUT.'.mpd')->assertOk();
-
-    $this->travel(31)->seconds();
-    askManifest(MANIFEST_OUTPUT.'.mpd')->assertNotFound();
-});
-
-it('shows an edited manifest within half a minute, whatever the options', function () {
+it('answers from the bucket as it is right now, leaving the caching to the edge', function () {
     $token = tokenWith(new ManifestOptions(resolution: 360));
 
-    expect(askManifest(MANIFEST_OUTPUT.'.m3u8', $token)->getContent())->not->toContain('HIGH');
+    expect(askManifest(MANIFEST_OUTPUT.'.m3u8', $token)->getContent())->not->toContain('TINY');
 
-    // A rung is added under the cap.
+    // A rung is added under the cap. The very next request shows it: a copy kept on this side
+    // too would add its own half minute to the one the edge already keeps.
     Storage::disk('s3')->put(
         MANIFEST_VIDEO.'/play/'.MANIFEST_OUTPUT.'.m3u8',
         twoRungMaster()."#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=426x240\nTINY/index.m3u8\n",
     );
 
-    expect(askManifest(MANIFEST_OUTPUT.'.m3u8', $token)->getContent())->not->toContain('TINY');
+    expect(askManifest(MANIFEST_OUTPUT.'.m3u8', $token)->getContent())->toContain('TINY/index.m3u8');
 
-    $this->travel(31)->seconds();
-
-    expect(askManifest(MANIFEST_OUTPUT.'.m3u8', $token)->getContent())->toContain('TINY/index.m3u8')
-        ->and(askManifest(MANIFEST_OUTPUT.'.m3u8')->getContent())->toContain('TINY/index.m3u8');
+    Storage::disk('s3')->delete(MANIFEST_VIDEO.'/play/'.MANIFEST_OUTPUT.'.m3u8');
+    askManifest(MANIFEST_OUTPUT.'.m3u8', $token)->assertNotFound();
 });
 
-it('keeps the manifests of different options apart, and shares one between equal ones', function () {
+it('gives each set of options its own manifest, in whatever order they are asked', function () {
     $capped = tokenWith(new ManifestOptions(resolution: 360));
     $sameCap = tokenWith(new ManifestOptions(resolution: 360));
     $full = tokenWith(new ManifestOptions);
 
-    // Asked in every order, each link gets its own answer: one viewer's cap is never served to
-    // a viewer who did not ask for it, and the other way round.
+    // One viewer's cap is never served to a viewer who did not ask for it, and the other way
+    // round; two who asked for the same thing get the same bytes, which is what lets the edge
+    // keep one copy for both.
+    $bodies = [];
     foreach ([$capped, $full, $sameCap, $full, $capped] as $token) {
         $body = askManifest(MANIFEST_OUTPUT.'.m3u8', $token)->assertOk()->getContent();
+        $bodies[] = $body;
 
         expect(str_contains($body, 'HIGH/index.m3u8'))->toBe($token === $full);
     }
 
-    // Two viewers who asked for the same thing share the built copy: with the manifest gone from
-    // the bucket, the second is still answered from what the first one caused to be built.
-    Storage::disk('s3')->delete(MANIFEST_VIDEO.'/play/'.MANIFEST_OUTPUT.'.m3u8');
-
-    expect(askManifest(MANIFEST_OUTPUT.'.m3u8', $sameCap)->assertOk()->getContent())->not->toContain('HIGH');
+    expect($bodies[0])->toBe($bodies[2])->toBe($bodies[4]);
 });
 
 it('carries nothing of the viewer in what it builds', function () {

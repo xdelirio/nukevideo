@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Enums\UsageMetric;
 use App\Http\Controllers\Controller;
 use App\Services\AnalyticsService;
+use App\Support\DateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -18,8 +19,8 @@ class UsageController extends Controller
     public function index(Request $request): JsonResponse
     {
         $request->validate([
-            'from' => 'required|date_format:Y-m-d',
-            'to' => 'required|date_format:Y-m-d',
+            'from' => DateRange::from(),
+            'to' => DateRange::to(),
             // Constrained to the catalogue, not free text. `value` is one shared column whose
             // unit lives in the metric name, so an unrecognised name used to answer with an empty
             // result — which, for a caller building an invoice out of this, reads as zero rather

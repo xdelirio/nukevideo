@@ -1,6 +1,54 @@
 #!/bin/sh
 set -e
 
+# ---- What may be written into nginx config ----
+#
+# Every variable below ends up in nginx.conf through envsubst, as text. Anything in one of them
+# that nginx reads as syntax — a `;`, a brace, a space, a newline — is config of whoever set the
+# variable: `VOD_CACHE_INACTIVE=30d; server { … }` used to add a server that handed out the
+# rendered file, with the bucket keys, the token secret and the internal secret in it. Some of
+# these come from a node's free-text environment in the panel, so each is held to the shape its
+# value can honestly have before anything is rendered.
+#
+# `fits` is true for an empty value (not set) and for a single line matching the whole pattern.
+fits() {
+    [ -z "$1" ] && return 0
+    [ "$(printf '%s' "$1" | wc -l)" -eq 0 ] && printf '%s\n' "$1" | grep -qxE "$2"
+}
+
+# What the edge cannot run without: refused loudly rather than replaced with a guess. The API
+# validates each of these before a deploy carries them, so this is a hand-set variable.
+require() {
+    eval "value=\${$1:-}"
+    if ! fits "$value" "$2"; then
+        echo "FATAL: $1 is not a value nginx config can carry (expected $3). Refusing to start." >&2
+        exit 1
+    fi
+}
+
+# Tuning: a value that does not fit is dropped with a warning, and the default takes its place.
+tunable() {
+    eval "value=\${$1:-}"
+    if ! fits "$value" "$2"; then
+        echo "WARNING: ignoring $1: expected $3" >&2
+        unset "$1"
+    fi
+}
+
+require AWS_ACCESS_KEY_ID     '[A-Za-z0-9/+=._-]+'  'an access key'
+require AWS_SECRET_ACCESS_KEY '[A-Za-z0-9/+=._-]+'  'a secret key'
+require AWS_DEFAULT_REGION    '[A-Za-z0-9-]+'       'a region name'
+require AWS_BUCKET            '[A-Za-z0-9._-]+'     'a bucket name'
+require AWS_ENDPOINT          '([A-Za-z]+://)?(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)(:[0-9]+)?(/[A-Za-z0-9/._~-]*)?' 'a URL'
+require VOD_TOKEN_SECRET      '([0-9A-Fa-f]{2})+'   'an even number of hex digits'
+require VOD_TOKEN_NAME        '[A-Za-z0-9_]+'       'letters, digits and underscores'
+require NODE_ID               '[0-9]+'              'a number'
+
+tunable VOD_CACHE_MAX_SIZE  '[0-9]+[kKmMgG]?'   'a size like 500g'
+tunable VOD_CACHE_MIN_FREE  '[0-9]+[kKmMgG]?'   'a size like 20g'
+tunable VOD_CACHE_KEYS_ZONE '[0-9]+[kKmM]?'     'a size like 200m'
+tunable VOD_CACHE_INACTIVE  '[0-9]+[smhdwMy]?'  'a time like 30d'
+
 # ---- Upstreams ----
 #
 # The edge talks to two servers it is told about by URL: the bucket and the API. nginx wants each
@@ -35,6 +83,9 @@ split_url() {
         resolve="resolve"
     fi
 
+    # A certificate names an IPv6 address without the brackets a URL puts around it.
+    name=$(echo "$name" | tr -d '[]')
+
     export "$1_SCHEME=$scheme" "$1_HOST=$host" "$1_NAME=$name" "$1_SERVER=$server" "$1_RESOLVE=$resolve"
 }
 
@@ -52,23 +103,35 @@ split_url AWS_ENDPOINT "$AWS_ENDPOINT" https
 
 # The API, which builds master manifests (`manifest_origin`): the internal URL and secret Vector
 # ships the access log with. Without both, the edge serves manifests from the bucket as it always
-# did — an edge run by hand, or deployed by a panel that predates this, keeps working. The secret
-# is written into nginx config inside a quoted string, so one that could end the string or start a
-# variable counts as missing rather than crashlooping the edge. `manifest_api` still has to name
-# a server for nginx to load; unconfigured, it is a port nothing listens on and nothing routes to.
+# did — an edge run by hand, or deployed by a panel that predates this, keeps working.
+#
+# Both end up inside nginx config, so both are held to what config can carry, and one that is not
+# counts as missing instead of crashlooping the edge or, worse, rendering a config that loads
+# and quietly does something else: a secret that could end its quoted string, a URL that is not
+# scheme://host[:port][/path] and nothing more. `manifest_api` still has to name a server for
+# nginx to load; unconfigured, it is a port nothing listens on and nothing routes to.
 MANIFEST_API_URL="${INTERNAL_API_URL:-}"
 export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-}"
-case "$INTERNAL_API_SECRET" in
-    *[!A-Za-z0-9._~+/=-]*) INTERNAL_API_SECRET="" ;;
-esac
+MANIFEST_API_OFF=""
 
-if [ -n "$MANIFEST_API_URL" ] && [ -n "$INTERNAL_API_SECRET" ]; then
+if [ -z "$MANIFEST_API_URL" ] || [ -z "$INTERNAL_API_SECRET" ]; then
+    MANIFEST_API_OFF="not configured"
+elif ! echo "$MANIFEST_API_URL" | grep -qiE '^https?://(\[[0-9a-f:.]+\]|[a-z0-9._-]+)(:[0-9]+)?(/[a-z0-9/._~-]*)?$'; then
+    MANIFEST_API_OFF="INTERNAL_API_URL is not a plain http(s) URL"
+else
+    case "$INTERNAL_API_SECRET" in
+        *[!A-Za-z0-9._~+/=-]*) MANIFEST_API_OFF="INTERNAL_API_SECRET has characters nginx config cannot carry" ;;
+    esac
+fi
+
+if [ -z "$MANIFEST_API_OFF" ]; then
     export MANIFEST_UPSTREAM=manifest_origin
     echo "manifest API: $MANIFEST_API_URL"
 else
     export MANIFEST_UPSTREAM=edge_origin
     MANIFEST_API_URL=http://127.0.0.1:9
-    echo "manifest API: not configured, serving manifests from the bucket"
+    INTERNAL_API_SECRET=""
+    echo "manifest API: $MANIFEST_API_OFF, serving manifests from the bucket"
 fi
 
 split_url MANIFEST_API "$MANIFEST_API_URL" http

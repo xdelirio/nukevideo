@@ -39,7 +39,8 @@ class ManifestController extends Controller
 
         return response($body, 200, [
             'Content-Type' => ManifestEditor::CONTENT_TYPES[DynamicManifestService::formatOf($file)],
-            // Per link, so no shared cache may keep it. The built copies are cached on this side.
+            // Not for any cache that reads this header: the edge keeps it on its own terms, under
+            // the link's options key, and nothing else has that key.
             'Cache-Control' => 'no-store',
         ]);
     }

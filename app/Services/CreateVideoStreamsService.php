@@ -7,6 +7,7 @@ use App\Models\Video;
 use App\Services\Concerns\DetectsStreamCopy;
 use App\Services\Concerns\ResolvesRateControl;
 use App\Support\Bitrate;
+use App\Support\MediaSource;
 use Exception;
 use FFMpeg\FFProbe;
 use FFMpeg\FFProbe\DataMapping\Format;
@@ -35,6 +36,9 @@ class CreateVideoStreamsService
 
     private string $localPath = '';
 
+    /** Where the source's own timestamps start ({@see MediaSource::startTime}); read once. */
+    private ?float $sourceStartTime = null;
+
     private float $containerDuration = 0.0;
 
     /** Where each audio track's packets stop, keyed by ffprobe stream index. */
@@ -62,6 +66,11 @@ class CreateVideoStreamsService
 
         if (empty($outputs)) {
             throw new Exception("No outputs configured for template {$video->template?->ulid}");
+        }
+
+        // Before anything opens it: a playlist is read by following what it lists.
+        if (MediaSource::isPlaylist(MediaSource::head($localPath))) {
+            throw new Exception("The source of video {$video->ulid} is a playlist, not a media file.");
         }
 
         $this->trackMeta = $this->probeContainerTracks($localPath);
@@ -334,7 +343,14 @@ class CreateVideoStreamsService
         $derivedGop = $this->deriveGopSize($this->sourceFrameRate($sourceVideo));
 
         $ladder = array_map(function (array $variantConfig) use ($videoCodec, $derivedGop) {
-            $variantConfig = array_merge(['video_codec' => $videoCodec], $variantConfig);
+            // The output's codec wins. It is the one the template was validated against and the
+            // one the video was routed to hardware by; a variant carrying its own (the rules now
+            // refuse it, but stored templates are not re-validated) would be encoded as something
+            // neither had seen. Only a template from before the codec moved to the output, which
+            // has none there, keeps what its variants say.
+            $variantConfig = $videoCodec === null
+                ? $variantConfig
+                : array_merge($variantConfig, ['video_codec' => $videoCodec]);
 
             if (empty($variantConfig['gop_size']) && $derivedGop) {
                 $variantConfig['gop_size'] = $derivedGop;
@@ -467,7 +483,14 @@ class CreateVideoStreamsService
         $resolved = [];
         foreach ($rungs as $channels => $config) {
             $resolved[$channels] = self::capAudioBitrateToSource(
-                array_merge($sharedAudioParams, $config, ['channels' => (string) $channels]),
+                // The block's codec wins over a rung's, for the reason the output's video codec
+                // wins over a variant's ({@see resolveVideoStreams}).
+                array_merge(
+                    $sharedAudioParams,
+                    $config,
+                    array_filter(['audio_codec' => $sharedAudioParams['audio_codec'] ?? null]),
+                    ['channels' => (string) $channels],
+                ),
                 $cap,
             );
         }
@@ -584,6 +607,13 @@ class CreateVideoStreamsService
      * in ffprobe's stream tags → null. Only real ISO 639 codes survive (validated on the primary
      * subtag so `es-419` passes); `und`/`mis`/`mul`/`zxx` placeholders and nonexistent codes become
      * null, so shaka emits a valid empty `lang=` and the track is kept rather than failing the run.
+     *
+     * The WHOLE tag has to be shaped like a language tag, not just its first subtag. It is text
+     * from the uploaded file, and it is written as it stands into the packager's comma-separated
+     * stream descriptor and from there into the master playlist: `en-US,init_segment=/a/path`
+     * used to pass as English and append descriptor fields of the uploader's choosing. Same
+     * pattern as the edit endpoint ({@see UpdateStreamData}), `\z` included — `$` would let a
+     * trailing newline through.
      */
     private function sourceLanguage(FFStream $stream): ?string
     {
@@ -593,11 +623,13 @@ class CreateVideoStreamsService
             ? $fromContainer
             : (($stream->get('tags') ?? [])['language'] ?? null);
 
-        if ($language === null || trim($language) === '') {
+        $language = trim((string) $language);
+
+        if (! preg_match(PackagerCommandBuilder::LANGUAGE_PATTERN, $language)) {
             return null;
         }
 
-        $primary = strtolower(explode('-', trim($language))[0]);
+        $primary = strtolower(explode('-', $language)[0]);
 
         return Languages::exists($primary) || Languages::alpha3CodeExists($primary) ? $language : null;
     }
@@ -640,6 +672,12 @@ class CreateVideoStreamsService
 
     private function lastPacketTime(int $index, float $from): ?float
     {
+        // Packet times are the container's own, which need not start at zero — hours in, for a
+        // transport stream captured off air — while `$from` and the end this returns are both
+        // counted from the start of the file. Unshifted, such a source's tracks all "ended" hours
+        // past its duration and the read interval started before the file did.
+        $this->sourceStartTime ??= MediaSource::startTime($this->localPath);
+
         // Generous: the fallback path walks the whole file when a track ends before the tail window.
         $result = Process::timeout(600)->run([
             'ffprobe', '-v', 'error',
@@ -647,7 +685,7 @@ class CreateVideoStreamsService
             '-show_entries', 'packet=pts_time',
             '-of', 'csv=p=0',
             // From this second to EOF, so the tail is read without walking the whole file.
-            '-read_intervals', sprintf('%.3f%%', $from),
+            '-read_intervals', sprintf('%.3f%%', $this->sourceStartTime + $from),
             $this->localPath,
         ]);
 
@@ -663,7 +701,7 @@ class CreateVideoStreamsService
             $line = trim($line);
 
             if (is_numeric($line)) {
-                $end = max($end, (float) $line);
+                $end = max($end, (float) $line - $this->sourceStartTime);
             }
         }
 

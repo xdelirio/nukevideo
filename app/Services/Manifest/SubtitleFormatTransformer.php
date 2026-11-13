@@ -5,6 +5,7 @@ namespace App\Services\Manifest;
 use App\Data\Video\ManifestOptions;
 use App\Enums\SubtitleFormat;
 use App\Models\Stream;
+use App\Models\Video;
 use App\Services\SubtitlePackager;
 use DOMElement;
 
@@ -16,7 +17,7 @@ use DOMElement;
  * Each text `AdaptationSet` keeps everything a track menu shows — language, label, role, ids —
  * and only changes how the track is fetched: the segment template goes, and a `BaseURL` names the
  * sidecar file published next to the track's segments ({@see SubtitlePackager}). The URL is
- * relative and inside the playback zone on purpose: the edge appends the viewer's token to every
+ * inside the playback zone on purpose: the edge appends the viewer's token to every
  * `BaseURL` it serves, and that token authorizes `play/` and nothing else — so the standalone copy
  * in the download zone, which the playback links hand out one by one, cannot be the target.
  *
@@ -34,7 +35,7 @@ class SubtitleFormatTransformer implements ManifestTransformer
         return $format === 'dash' && $options->subtitlesFormat === SubtitleFormat::VTT;
     }
 
-    public function transform(string $body, string $format, ManifestOptions $options): string
+    public function transform(string $body, string $format, string $videoUlid, ManifestOptions $options): string
     {
         if (! $this->applies($options, $format)) {
             return $body;
@@ -49,7 +50,7 @@ class SubtitleFormatTransformer implements ManifestTransformer
         $changed = false;
 
         foreach ($mpd->xpath->query('//m:AdaptationSet[@contentType="text" or m:Representation[@codecs="wvtt"]]') as $set) {
-            if ($set instanceof DOMElement && $this->pointAtSidecar($mpd, $set)) {
+            if ($set instanceof DOMElement && $this->pointAtSidecar($mpd, $set, $videoUlid)) {
                 $changed = true;
             }
         }
@@ -57,12 +58,15 @@ class SubtitleFormatTransformer implements ManifestTransformer
         return $changed ? $mpd->save() : $body;
     }
 
-    private function pointAtSidecar(DashDocument $mpd, DOMElement $set): bool
+    private function pointAtSidecar(DashDocument $mpd, DOMElement $set, string $videoUlid): bool
     {
         $template = $mpd->xpath->query('.//m:SegmentTemplate[@media]', $set)->item(0);
-        $representation = $mpd->xpath->query('m:Representation', $set)->item(0);
+        $representations = $mpd->xpath->query('m:Representation', $set);
+        $representation = $representations->item(0);
 
-        if (! $template instanceof DOMElement || ! $representation instanceof DOMElement) {
+        // One track is one Representation, as the packager writes it. Anything else is not a
+        // shape this knows how to point at a single file, and is left exactly as it is.
+        if (! $template instanceof DOMElement || ! $representation instanceof DOMElement || $representations->length !== 1) {
             return false;
         }
 
@@ -73,7 +77,14 @@ class SubtitleFormatTransformer implements ManifestTransformer
             return false;
         }
 
-        $sidecar = $streamUlid.'/'.Stream::SIDECAR_VTT;
+        // From the root of the host, not relative to the manifest. Every other URL in the manifest
+        // is relative, and this one could be — but the manifest's own URL carries the token, whose
+        // ACL has slashes in it (`acl=/{video}/play/*`), and a client that finds "the manifest's
+        // directory" by cutting at the last slash cuts inside the query. ffmpeg's DASH reader does
+        // exactly that for a BaseURL, asks for a URL that validates as nothing, and gives up on
+        // the whole presentation over one subtitle. A path that starts at the root leaves nothing
+        // to work out.
+        $sidecar = '/'.$videoUlid.'/'.Video::PLAY_DIR.'/'.$streamUlid.'/'.Stream::SIDECAR_VTT;
 
         $template->parentNode?->removeChild($template);
 
@@ -87,8 +98,9 @@ class SubtitleFormatTransformer implements ManifestTransformer
             }
         }
 
-        // Describes how the segments that are no longer there line up.
+        // Describe segments that are no longer there.
         $set->removeAttribute('segmentAlignment');
+        $set->removeAttribute('startWithSAP');
 
         $representation->insertBefore(
             $mpd->doc->createElementNS(DashDocument::NS, 'BaseURL', $sidecar),

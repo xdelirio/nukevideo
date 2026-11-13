@@ -25,6 +25,23 @@ class TemplateFormatRule implements DataAwareRule, ValidationRule
      */
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {
+        if (! is_array($value)) {
+            $fail('Each variant must be an object of encoding parameters.');
+
+            return;
+        }
+
+        // The codec is the output's, and everything here is checked against that one. A variant
+        // naming its own would be validated as one codec and encoded as another, on hardware the
+        // video was never routed to.
+        foreach (['video_codec', 'audio_codec'] as $key) {
+            if (array_key_exists($key, $value)) {
+                $fail("A variant cannot set [{$key}]: the codec is set on the output.");
+
+                return;
+            }
+        }
+
         $codecs = collect(config('ffmpeg.codecs'))->keyBy('codec');
         $parameters = config('ffmpeg.parameters');
 

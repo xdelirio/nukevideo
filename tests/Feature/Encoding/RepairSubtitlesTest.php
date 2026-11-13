@@ -119,6 +119,7 @@ it('publishes each repaired track as a plain sidecar the manifest can be pointed
     $mpd = (new SubtitleFormatTransformer)->transform(
         (string) Storage::disk('s3')->get("{$video->playPrefix()}/OUTPUT.mpd"),
         'dash',
+        $video->ulid,
         new ManifestOptions(subtitlesFormat: SubtitleFormat::VTT),
     );
 

@@ -120,7 +120,7 @@ class NodeController extends Controller
                 // The fallback cache volume is the node's alone and is otherwise never reclaimed.
                 // A cache pool directory on a dedicated disk is not touched: the pool belongs to
                 // the host and is what the next node deployed there picks up.
-                $docker->removeVolume($node, ProxyCacheService::volumeFor($node));
+                $this->docker->removeVolume($node, ProxyCacheService::volumeFor($node));
             }
         } catch (\Throwable $e) {
             Log::error('Failed to remove containers for node', [
@@ -170,6 +170,11 @@ class NodeController extends Controller
 
     public function bootstrapScript(Request $request, Node $node)
     {
+        // Workers only, like the command that mints the URL. A proxy's deploy needs the list of
+        // disks it may format, and built from here it would get none — which the script reads as
+        // "every spare disk". Nothing mints such a URL today; this keeps it true if something does.
+        abort_unless($node->type === NodeType::WORKER, 404);
+
         // The signature already proves the nonce is one we minted, so the only thing left to
         // establish is that it has not been spent. `add` is the atomic half of that check: it
         // succeeds for exactly one caller, so two concurrent fetches cannot both win.

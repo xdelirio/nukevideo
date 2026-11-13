@@ -169,6 +169,13 @@ class EdgeLinkSigner
         if ($manifestKey !== null) {
             $authString .= '~'.ManifestOptionsRegistry::TOKEN_FIELD."={$manifestKey}";
         }
+        // A nonce, so no two mints ever produce the same token. Without it a token is its expiry
+        // and its ACL: two viewers minting the same video within one second held the very same
+        // one, and everything recorded AGAINST a token — the tracking id its bytes are billed to,
+        // the mark that books them as a download ({@see TrackingRegistry}) — was overwritten by
+        // whoever minted last, for both. Another field the validator ignores and signs.
+        $authString .= '~n='.bin2hex(random_bytes(8));
+
         $hmac = hash_hmac('sha256', $authString, pack('H*', $this->settings->token_secret));
         $token = "{$authString}~hmac={$hmac}";
 

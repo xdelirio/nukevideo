@@ -8,7 +8,7 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 
 - Validates Akamai-style stream tokens (HMAC) on incoming requests.
 - Reads the pre-packaged CMAF segments from S3 using AWS authentication. It only ever reads: any method but `GET`, `HEAD` and `OPTIONS` gets a `405`.
-- Caches segments on the node's own disk pool so repeat requests don't hit S3 every time; **master manifests are asked of the API**, which builds them per link and caches them for 30 seconds (see [Per-link manifests](/guide/streaming#per-link-manifests)); each viewer still gets their own token written into them, and when the API cannot be reached the node serves the packaged manifest from S3 instead. HLS media playlists stay cached on the node for 30 seconds, and **downloads never enter it** (they are whole files, fetched once, and must keep supporting `Range` resumes). See [Cache disks](/guide/nodes#cache-disks).
+- Caches segments on the node's own disk pool so repeat requests don't hit S3 every time; **master manifests are asked of the API**, which builds them per link, and kept for 30 seconds under the link's options (see [Per-link manifests](/guide/streaming#per-link-manifests)); each viewer still gets their own token written into them, and when the API does not answer the node serves the packaged manifest from S3 instead. One address can make the node ask the API for at most 20 uncached manifests a second and 10 at a time, and a node never holds more than 64 requests open to the API; past any of those the manifest comes from S3 as well. HLS media playlists stay cached on the node for 30 seconds, and **downloads never enter it** (they are whole files, fetched once, and must keep supporting `Range` resumes). See [Cache disks](/guide/nodes#cache-disks).
 - Embeds the token a manifest was requested with into the segment URLs it rewrites, rather than minting one per manifest, so every request of a playback session carries the same token — the one the API recorded a caller's tracking id against. The token is logged and hashed on the node; nothing downstream sees it. See [Requesting a Playback URL](/guide/streaming#requesting-a-playback-url).
 - Logs, per request, what its cache did and what it fetched from the origin; the nodes page turns that into a hit ratio per node. Origin bytes are recorded under the `origin_bytes` metric and account `0` — the operator's cost, never a customer's usage.
 - Answers CORS itself: the bucket's CORS rules play no part in self-hosted delivery, and one cached copy of a segment serves every embedding site. Any site may embed unless you set [allowed domains](#allowed-domains).
@@ -16,9 +16,9 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 - Keeps serving what it has cached while S3 answers with errors or is unreachable.
 - Verifies the S3 endpoint's TLS certificate unless told not to with [`VOD_S3_TLS_VERIFY`](/guide/configuration#proxy-nodes).
 - Resolves the real client IP behind Cloudflare or another reverse proxy.
-- Ships access-log bandwidth to the API through a Vector.dev pipeline.
+- Ships access-log bandwidth to the API through a Vector.dev pipeline. Only responses that delivered content (`200`, `206`) are metered: a refused or failed request names its video in the URL, which needs no token, so counting it would let anyone add usage to a video that is not theirs.
 
-Token validation is configured in **CDN Settings** (token secret, token name, token window, IP binding). These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
+Token validation is configured in **CDN Settings** (token secret, token name, token window, IP binding). The token secret is hexadecimal, in whole bytes; anything else is refused when saved. These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
 
 ### IP binding
 

@@ -13,6 +13,7 @@ use App\Enums\SubtitleFormat;
 use App\Services\Manifest\MaxResolutionTransformer;
 use App\Services\Manifest\SubtitleFormatTransformer;
 
+const MANIFEST_OWNER = '01M6ABMRKRYYEF1SHGYAZSMWHV';
 const SUB_EN = '01M6ABN3Y5AAAAAAAAAAAAAAEN';
 const SUB_ES = '01M6ABN3Y5AAAAAAAAAAAAAAES';
 
@@ -82,12 +83,12 @@ function ladderMaster(array $sizes, string $extra = ''): string
 
 function capped(string $body, string $format, int $resolution): string
 {
-    return (new MaxResolutionTransformer)->transform($body, $format, new ManifestOptions(resolution: $resolution));
+    return (new MaxResolutionTransformer)->transform($body, $format, MANIFEST_OWNER, new ManifestOptions(resolution: $resolution));
 }
 
 function asVtt(string $body, string $format = 'dash'): string
 {
-    return (new SubtitleFormatTransformer)->transform($body, $format, new ManifestOptions(subtitlesFormat: SubtitleFormat::VTT));
+    return (new SubtitleFormatTransformer)->transform($body, $format, MANIFEST_OWNER, new ManifestOptions(subtitlesFormat: SubtitleFormat::VTT));
 }
 
 /** The video heights an MPD still lists, in document order. */
@@ -190,6 +191,46 @@ it('drops the I-frame playlist of a dropped rung and keeps an audio-only variant
         ->toContain("CODECS=\"mp4a.40.2\",AUDIO=\"audio\"\nAUDIO/index.m3u8");
 });
 
+it('takes a dropped variant\'s URI with it even when lines sit between the two', function () {
+    // Not what the packager writes, but legal HLS: the URI is the next line that is neither
+    // blank nor a tag. Dropping only the line right after the tag left a URI with no variant.
+    $master = "#EXTM3U\r\n"
+        ."#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=640x360\r\nLOW/index.m3u8\r\n"
+        ."#EXT-X-STREAM-INF:BANDWIDTH=2,RESOLUTION=1920x1080\r\n\r\n# a comment\r\nHIGH/index.m3u8\r\n"
+        ."#EXT-X-STREAM-INF:BANDWIDTH=3,RESOLUTION=1280x720\r\nMID/index.m3u8\r\n";
+
+    $capped = capped($master, 'hls', 720);
+
+    expect($capped)->not->toContain('HIGH/index.m3u8')
+        ->toContain('LOW/index.m3u8')
+        ->toContain('MID/index.m3u8')
+        ->and(masterHeights($capped))->toBe([360, 720]);
+});
+
+it('leaves a text set it does not recognise as the packager\'s alone', function () {
+    // One template shared by two Representations: pointing only the first at a file would leave
+    // the second with no way to be fetched at all.
+    $set = <<<'XML'
+            <AdaptationSet id="2" contentType="text" lang="en">
+              <SegmentTemplate timescale="1000" initialization="01M6ABN3Y5AAAAAAAAAAAAAAEN/init.mp4" media="01M6ABN3Y5AAAAAAAAAAAAAAEN/$Number$.m4s" startNumber="1"/>
+              <Representation id="2" bandwidth="82" codecs="wvtt" mimeType="application/mp4"/>
+              <Representation id="3" bandwidth="90" codecs="wvtt" mimeType="application/mp4"/>
+            </AdaptationSet>
+        XML;
+    $original = ladderMpd(LANDSCAPE, $set);
+
+    expect(asVtt($original))->toBe($original);
+});
+
+it('drops what described the segments of a converted track', function () {
+    $set = str_replace('segmentAlignment="true"', 'segmentAlignment="true" startWithSAP="1"', textSet(SUB_EN, 'en', 2));
+
+    expect(asVtt(ladderMpd(LANDSCAPE, $set)))
+        ->toContain('<BaseURL>/'.MANIFEST_OWNER.'/play/'.SUB_EN.'/sub.vtt</BaseURL>')
+        ->not->toContain('contentType="text" lang="en" segmentAlignment')
+        ->not->toMatch('/contentType="text"[^>]*startWithSAP/');
+});
+
 it('hands back what it cannot parse', function (string $body) {
     expect(capped($body, 'dash', 720))->toBe($body)
         ->and(asVtt($body))->toBe($body);
@@ -206,7 +247,7 @@ it('leaves a master playlist with no video variants alone', function () {
 it('points a text track at its sidecar file and keeps what a menu shows', function () {
     $mpd = asVtt(ladderMpd(LANDSCAPE, textSet(SUB_EN, 'en', 2)));
 
-    expect($mpd)->toContain('<BaseURL>'.SUB_EN.'/sub.vtt</BaseURL>')
+    expect($mpd)->toContain('<BaseURL>/'.MANIFEST_OWNER.'/play/'.SUB_EN.'/sub.vtt</BaseURL>')
         ->toContain('mimeType="text/vtt"')
         ->not->toContain('wvtt')
         ->not->toContain(SUB_EN.'/init.mp4')
@@ -234,8 +275,8 @@ it('converts every text track, without asking the bucket whether its file is the
     // request per track to find out.
     $mpd = asVtt(ladderMpd(LANDSCAPE, textSet(SUB_EN, 'en', 2).textSet(SUB_ES, 'es', 3)));
 
-    expect($mpd)->toContain('<BaseURL>'.SUB_EN.'/sub.vtt</BaseURL>')
-        ->toContain('<BaseURL>'.SUB_ES.'/sub.vtt</BaseURL>')
+    expect($mpd)->toContain('<BaseURL>/'.MANIFEST_OWNER.'/play/'.SUB_EN.'/sub.vtt</BaseURL>')
+        ->toContain('<BaseURL>/'.MANIFEST_OWNER.'/play/'.SUB_ES.'/sub.vtt</BaseURL>')
         ->not->toContain('wvtt')
         ->not->toContain(SUB_EN.'/init.mp4');
 });
@@ -245,6 +286,18 @@ it('leaves a text track it cannot place alone', function () {
     $original = ladderMpd(LANDSCAPE, str_replace(SUB_EN, 'subs', textSet(SUB_EN, 'en', 2)));
 
     expect(asVtt($original))->toBe($original);
+});
+
+it('names the sidecar from the root of the host, never relative to the manifest', function () {
+    // The manifest's URL carries the token, and the token's ACL has slashes in it. A client that
+    // resolves a relative BaseURL by cutting the manifest URL at its last slash — ffmpeg's DASH
+    // reader does — cuts inside the query, requests a URL no token covers, and drops the whole
+    // presentation. Seen with ffprobe against a real edge.
+    $mpd = asVtt(ladderMpd(LANDSCAPE, textSet(SUB_EN, 'en', 2)));
+
+    preg_match_all('#<BaseURL>([^<]+)</BaseURL>#', $mpd, $urls);
+
+    expect($urls[1])->toBe(['/'.MANIFEST_OWNER.'/play/'.SUB_EN.'/sub.vtt']);
 });
 
 it('leaves a manifest with no text tracks alone', function () {
@@ -269,5 +322,5 @@ it('caps and converts independently of each other', function () {
     $mpd = asVtt(capped(ladderMpd(LANDSCAPE, textSet(SUB_EN, 'en', 2)), 'dash', 720));
 
     expect(mpdHeights($mpd))->toBe([360, 720])
-        ->and($mpd)->toContain('<BaseURL>'.SUB_EN.'/sub.vtt</BaseURL>');
+        ->and($mpd)->toContain('<BaseURL>/'.MANIFEST_OWNER.'/play/'.SUB_EN.'/sub.vtt</BaseURL>');
 });

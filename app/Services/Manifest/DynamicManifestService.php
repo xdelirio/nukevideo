@@ -4,35 +4,25 @@ namespace App\Services\Manifest;
 
 use App\Data\Video\ManifestOptions;
 use App\Models\Video;
-use App\Services\ManifestEditor;
 use Illuminate\Contracts\Container\Container;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 
 /**
  * Builds a master manifest for one request: the file the packager wrote, as the link's options
  * want it.
  *
- * This is on the path of every playback start — the edge asks here instead of reading the bucket,
- * and no longer caches what it gets — so the answer normally comes from the cache alone: no
- * database ever, and the bucket only when nobody asked for the same manifest with the same
- * options in the last {@see TTL} seconds.
+ * Nothing is cached here. The edge keeps what this answers for 30 seconds, under the manifest's
+ * path and the link's options key, and asks again only when that copy is gone — so this runs once
+ * per manifest and set of options per half minute, not once per playback start, and a cache on
+ * this side as well would only double how long an edited manifest takes to show. That is also
+ * why a manifest may carry nothing about one viewer ({@see ManifestTransformer}): the edge hands
+ * the same built copy to everyone whose link asked for the same thing, and writes each viewer's
+ * token in afterwards.
  *
- * One entry per (manifest, options), shared by every viewer who asked for that. Sharing is safe
- * because nothing viewer-specific is ever in a built manifest: the token is written in by the
- * edge afterwards, and the options are part of the key. A transformer that put anything about
- * one viewer into the body would break that ({@see ManifestTransformer}).
+ * It touches no database: the options come out of the token, the renditions out of the manifest.
  */
 class DynamicManifestService
 {
-    /**
-     * Seconds a manifest read from the bucket is trusted. Manifests are edited in place after
-     * publishing — a track added, relabelled or removed ({@see ManifestEditor}) — and this is the
-     * same 30 seconds the edge kept them for while it read the bucket itself, so those edits
-     * surface no later than they did.
-     */
-    public const TTL = 30;
-
     /**
      * Every personalization, in the order they run. Adding one is a class here and the
      * {@see ManifestOptions} property it reads. The order only matters between two that touch the
@@ -56,28 +46,11 @@ class DynamicManifestService
     /**
      * The manifest to serve, or null when the bucket has no such file.
      *
-     * A missing manifest is not remembered: it is either a link to a file that never existed,
-     * which costs the caller and nobody else, or a manifest about to be written, which must not
-     * stay hidden.
-     *
-     * Nothing stops several requests for the same cold manifest from each building it. That is
-     * one bucket read of a few kilobytes apiece, once per {@see TTL}, and they all store the same
-     * bytes — cheaper than a lock on the path of every playback start.
-     *
      * @param  string  $file  the manifest's name inside the video's play zone, e.g. `{outputUlid}.mpd`
      */
     public function render(string $videoUlid, string $file, ManifestOptions $options): ?string
     {
-        $path = $videoUlid.'/'.Video::PLAY_DIR.'/'.$file;
-        $key = "manifest:{$path}:{$options->cacheKey()}";
-
-        $cached = Cache::get($key);
-
-        if (is_string($cached)) {
-            return $cached;
-        }
-
-        $body = Storage::disk('s3')->get($path);
+        $body = Storage::disk('s3')->get($videoUlid.'/'.Video::PLAY_DIR.'/'.$file);
 
         if (! is_string($body) || $body === '') {
             return null;
@@ -86,10 +59,8 @@ class DynamicManifestService
         $format = self::formatOf($file);
 
         foreach ($this->applicable($options, $format) as $transformer) {
-            $body = $transformer->transform($body, $format, $options);
+            $body = $transformer->transform($body, $format, $videoUlid, $options);
         }
-
-        Cache::put($key, $body, self::TTL);
 
         return $body;
     }

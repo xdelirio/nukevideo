@@ -163,10 +163,11 @@ class SubtitlePackager
         foreach ($subs as $sub) {
             $target = "{$dir}/{$sub['ulid']}/".Stream::SIDECAR_VTT;
 
-            // Non-critical like the rest of this class: without the file the track simply keeps
-            // its packaged form for those links.
+            // Does not fail the caller, like the rest of this class, but it is not harmless: DASH
+            // manifests point at this file by default, without checking it is there, so a track
+            // left without one shows no subtitles there until it is repackaged.
             if (! is_dir(dirname($target)) || ! @copy($sub['path'], $target)) {
-                Log::warning('Could not write a subtitle sidecar', ['track' => $sub['ulid']]);
+                Log::error('Could not write a subtitle sidecar', ['track' => $sub['ulid']]);
             }
         }
     }

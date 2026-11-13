@@ -272,6 +272,33 @@ it('names the subtitle format in every manifest link and in no subtitle link', f
     expect($registry->resolve(linkToken($data['subtitles'][0]['url']))->isDefault())->toBeTrue();
 });
 
+it('never bills one viewer\'s bytes to another who minted in the same second', function () {
+    // What is recorded against a token is looked up by its hash, so two identical tokens are one
+    // entry: the later mint's tracking id answered for both viewers, and one `download` mint
+    // turned the other's streaming into download bytes.
+    $this->freezeTime();
+
+    $video = playVideo();
+    playOutput($video, formats: ['hls']);
+
+    $first = $this->postJson("/api/videos/{$video->ulid}/play", ['trackingId' => 'viewer-1'])->json('data.sources.0.url');
+    $second = $this->postJson("/api/videos/{$video->ulid}/play", ['trackingId' => 'viewer-2', 'download' => true])->json('data.sources.0.url');
+    $anonymous = $this->postJson("/api/videos/{$video->ulid}/play")->json('data.sources.0.url');
+
+    expect(linkToken($first))->not->toBe(linkToken($second))
+        ->and(linkToken($anonymous))->not->toBe(linkToken($first));
+
+    $hash = fn (string $url) => hash('sha256', linkToken($url));
+    $found = app(TrackingRegistry::class)->lookupMany([$hash($first), $hash($second), $hash($anonymous)]);
+
+    // The third mint named no viewer and is labelled by the caller's default, whatever that is —
+    // the point is that it is neither of the other two's.
+    expect($found['tracking'][$hash($first)])->toBe('viewer-1')
+        ->and($found['tracking'][$hash($second)])->toBe('viewer-2')
+        ->and($found['tracking'][$hash($anonymous)])->not->toBeIn(['viewer-1', 'viewer-2'])
+        ->and($found['downloads'])->toBe([$hash($second) => true]);
+});
+
 it('never hands one viewer the manifest options of another who minted in the same second', function () {
     // A token is its expiry, its ACL and an HMAC of the two: two viewers minting the same video
     // within one second used to hold the very same token, so whatever the options were filed
@@ -316,11 +343,16 @@ it('names the options in the token as an opaque key, never as their values', fun
     $url = $this->postJson("/api/videos/{$video->ulid}/play", ['resolution' => 360, 'subtitlesFormat' => 'segments'])
         ->json('data.sources.0.url');
 
-    expect(linkToken($url))->toMatch('/~mo=[0-9a-f]{16}~hmac=/')
-        ->and($url)->not->toContain('360')
+    // The token's fields, by name: an expiry, an ACL, the opaque key, a nonce and the signature.
+    // Nothing spells the options out — not as a field, and not in the query beside the token.
+    preg_match_all('/(?:^|~)([a-z]+)=/', linkToken($url), $fields);
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+    expect($fields[1])->toBe(['exp', 'acl', 'mo', 'n', 'hmac'])
+        ->and(array_keys($query))->toBe(['__hdnea__'])
+        ->and(linkToken($url))->toMatch('/~mo=[0-9a-f]{16}~n=[0-9a-f]{16}~hmac=/')
         ->and($url)->not->toContain('segments')
-        // Signed in, so it cannot be swapped for another viewer's: the HMAC covers it.
-        ->and(preg_replace('/~hmac=.*/', '', linkToken($url)))->toContain('~mo=');
+        ->and($url)->not->toContain('resolution');
 });
 
 it('names the options of a batch mint in every video\'s links', function () {

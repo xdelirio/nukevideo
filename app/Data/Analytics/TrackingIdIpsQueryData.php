@@ -4,6 +4,7 @@ namespace App\Data\Analytics;
 
 use App\Data\RequestData;
 use App\Http\Controllers\Api\AnalyticsController;
+use App\Support\DateRange;
 
 /** The date range and size of one tracking id's address list ({@see AnalyticsController::trackingIdIps()}). */
 class TrackingIdIpsQueryData extends RequestData
@@ -22,8 +23,8 @@ class TrackingIdIpsQueryData extends RequestData
     public static function rules(): array
     {
         return [
-            'from' => 'required|date_format:Y-m-d',
-            'to' => 'required|date_format:Y-m-d|after_or_equal:from',
+            'from' => DateRange::from(),
+            'to' => DateRange::to(),
             'limit' => 'nullable|integer|min:1|max:1000',
         ];
     }

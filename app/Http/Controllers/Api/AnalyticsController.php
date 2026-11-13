@@ -86,9 +86,12 @@ class AnalyticsController extends Controller
      *
      * Reachable with a project API key, like the rest of this controller bar `edges()`, and for
      * the same reason: reading these numbers back is what an integrating backend holds a key for.
-     * It reads no `$request->user()`, which for a project key is a Project and not a User.
+     *
+     * Always the caller's own account. The ids are the caller's free text, so another tenant uses
+     * the same ones; unscoped, this answered with everybody's bytes under each id. `accountId()`
+     * and not `id`: for a project key the caller is a Project, whose id is from another sequence.
      */
-    public function trackingIds(TrackingIdBytesQueryData $data): JsonResponse
+    public function trackingIds(Request $request, TrackingIdBytesQueryData $data): JsonResponse
     {
         return response()->json([
             'data' => TrackingIdBytesData::collect($this->analyticsService->bytesByTrackingIds(
@@ -97,6 +100,7 @@ class AnalyticsController extends Controller
                 $data->ids(),
                 $data->metric,
                 $data->granularity === UsageGranularity::DAILY,
+                accountId: $request->user()->accountId(),
             )),
         ]);
     }
@@ -260,9 +264,34 @@ class AnalyticsController extends Controller
         return $projectId === null ? [] : $read();
     }
 
+    /**
+     * Refuses a `video` or `trackingId` filter that has no project to be read inside.
+     *
+     * Without a project the totals are instance-wide, which names nobody. A filter changes that:
+     * it turns the total into one video's traffic, or one viewer label's, and a video's ULID is in
+     * every playback URL it has ever been given — so the filter let any account read the bytes,
+     * the viewer count and the daily curve of a video that is not its own.
+     */
+    private function assertFiltersScoped(DashboardQueryData $query, ?int $projectId): void
+    {
+        if ($projectId !== null) {
+            return;
+        }
+
+        foreach (['video' => $query->video, 'trackingId' => $query->trackingIdFilter()] as $field => $value) {
+            if ($value !== null && ($field === 'trackingId' || $value !== '')) {
+                throw ValidationException::withMessages([
+                    $field => "Filtering by [{$field}] needs project context: send X-Project-Ulid, or call with a project API key.",
+                ]);
+            }
+        }
+    }
+
     /** @return array<int, AnalyticsCardData> */
     private function cardsFor(DashboardQueryData $query, ?int $projectId): array
     {
+        $this->assertFiltersScoped($query, $projectId);
+
         $summary = $this->analyticsService->summary($query->from, $query->to, $query->video, $query->trackingIdFilter(), $query->metric, $projectId);
         $encoding = $this->analyticsService->encodingUsage($query->from, $query->to);
         $usage = $this->analyticsService->usageSummary($query->from, $query->to, $projectId);
@@ -283,6 +312,8 @@ class AnalyticsController extends Controller
     /** @return array<int, BandwidthPointData> */
     private function bandwidthOverTimeFor(DashboardQueryData $query, ?int $projectId): array
     {
+        $this->assertFiltersScoped($query, $projectId);
+
         return BandwidthPointData::collect($this->analyticsService->bandwidthOverTime($query->from, $query->to, $query->video, $query->trackingIdFilter(), $query->metric, $projectId));
     }
 

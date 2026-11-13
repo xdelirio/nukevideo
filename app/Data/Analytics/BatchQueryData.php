@@ -3,6 +3,7 @@
 namespace App\Data\Analytics;
 
 use App\Data\RequestData;
+use App\Support\DateRange;
 
 /**
  * What every metrics read that takes a list of values has in common: a bounded date range and a cap
@@ -36,8 +37,8 @@ abstract class BatchQueryData extends RequestData
     protected static function rangeRules(): array
     {
         return [
-            'from' => 'required|date_format:Y-m-d',
-            'to' => 'required|date_format:Y-m-d',
+            'from' => DateRange::from(),
+            'to' => DateRange::to(),
         ];
     }
 }

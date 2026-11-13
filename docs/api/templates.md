@@ -71,7 +71,7 @@ POST /api/templates
 | Field | Type | Notes |
 |-------|------|-------|
 | `name` | string | **Required.** Up to 255 characters. |
-| `query` | object | **Required.** `outputs` needs at least one entry, each with a `video_codec`, at least one `variants` entry and an `audio` object with an `audio_codec` and at least one `channels` entry. Every parameter is validated against the codec's catalogue (see [Encoding Configuration](#encoding-configuration)). The structure is described in the [Templates guide](/guide/templates#template-structure). |
+| `query` | object | **Required.** `outputs` needs 1 to 10 entries, each with a `video_codec`, 1 to 20 `variants` and an `audio` object with an `audio_codec` and at least one `channels` entry. The codec is set on the output and nowhere else: a variant carrying `video_codec` or `audio_codec`, or a `channels` entry carrying anything but `channels` and `audio_bitrate`, is a `422`. Every parameter is validated against the codec's catalogue (see [Encoding Configuration](#encoding-configuration)). The structure is described in the [Templates guide](/guide/templates#template-structure). |
 | `enabled` | boolean | Optional, default `true`. |
 | `keepProcessedFiles` | boolean | Optional, default `true`. |
 | `keepOriginal` | boolean | Optional, default `false`. |

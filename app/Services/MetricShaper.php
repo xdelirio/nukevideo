@@ -59,6 +59,17 @@ class MetricShaper
         }
 
         if ($dated) {
+            // Counted before it is built: one row per series per day, so the size is known from
+            // two numbers, and a range that cannot fit is refused without materialising it first.
+            $days = CarbonPeriod::create($from, $to)->count();
+
+            if (count($series) * $days > MetricsQueryData::MAX_ROWS) {
+                throw ValidationException::withMessages([
+                    'shape' => 'Filling every day of this range produces more than '.MetricsQueryData::MAX_ROWS
+                        .' rows. Shorten the range, drop a dimension, or ask for the long shape.',
+                ]);
+            }
+
             $wide = $this->fillDates($wide, $series, $rowDims, $blank, $from, $to);
         }
 

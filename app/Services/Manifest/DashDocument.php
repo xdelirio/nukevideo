@@ -26,7 +26,9 @@ class DashDocument
         $doc->formatOutput = true;
 
         $previous = libxml_use_internal_errors(true);
-        $loaded = $xml !== '' && $doc->loadXML($xml);
+        // No network: a manifest has no business naming an external DTD or entity, and one that
+        // did would have this process fetch it.
+        $loaded = $xml !== '' && $doc->loadXML($xml, LIBXML_NONET);
         libxml_clear_errors();
         libxml_use_internal_errors($previous);
 

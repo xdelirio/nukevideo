@@ -330,7 +330,7 @@ describe the same tracks — same languages, labels and roles — as plain WebVT
   <Role schemeIdUri="urn:mpeg:dash:role:2011" value="subtitle"/>
   <Label>English</Label>
   <Representation id="2" bandwidth="82" mimeType="text/vtt">
-    <BaseURL>01JXXXXXXXXXXXXXXXXXXXXXXX/sub.vtt?__hdnea__=…</BaseURL>
+    <BaseURL>/01JVVVVVVVVVVVVVVVVVVVVVVV/play/01JXXXXXXXXXXXXXXXXXXXXXXX/sub.vtt?__hdnea__=…</BaseURL>
   </Representation>
 </AdaptationSet>
 ```

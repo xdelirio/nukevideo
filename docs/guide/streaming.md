@@ -111,16 +111,17 @@ minted without options gets the defaults: the full ladder, and subtitles as plai
 Only the master manifest takes this path. HLS media playlists and every segment are the same
 bytes for every viewer, and keep going from the edge's cache or straight from the bucket.
 
-**If the API cannot be reached**, the edge serves the packaged manifest from the bucket instead:
-the viewer plays, without the personalization — the full ladder, and DASH subtitles in their
-packaged form. That is the right trade while the options are
+**If the API does not answer with a manifest** — it is down, slow, overloaded, or the edge has
+asked too much of it — the edge serves the packaged manifest from the bucket instead: the viewer
+plays, without the personalization — the full ladder, and DASH subtitles in their packaged form.
+The response header `X-Manifest-Source` says which of the two answered (`api` or `bucket`). That is the right trade while the options are
 preferences — what a device can play, how a player wants its subtitles. It also means an option
 here **hides** a rendition, it does not lock it: the link's token still authorizes the whole
 playback directory.
 
 ## Caching
 
-The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Master manifests** are built by the API, which keeps each built variant for 30 seconds, shared by every viewer who asked for the same thing — so a playback start costs one request to the API and no trip to S3 — and the edge writes each viewer's token into the result on the way out. HLS media playlists are cached at the edge for 30 seconds, as before. Manifests and subtitle cues are served gzip-compressed. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks).
+The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Master manifests** are built by the API and cached at the edge for 30 seconds, one copy per manifest and set of options, shared by every viewer who asked for the same thing — so the API is asked once per half minute, not once per playback start — and the edge writes each viewer's token into the copy on the way out. HLS media playlists are cached at the edge for 30 seconds, as before. Manifests and subtitle cues are served gzip-compressed. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks).
 
 ## Bandwidth Monitoring
 

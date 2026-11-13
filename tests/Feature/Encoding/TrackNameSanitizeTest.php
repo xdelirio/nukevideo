@@ -54,3 +54,55 @@ it('strips the same characters again on the way into the packager', function () 
     expect($sanitize("Bad\n#EXT-X-KEY:METHOD=NONE"))->toBe('Bad #EXT-X-KEY:METHOD=NONE')
         ->and($sanitize('Comment "Director"'))->toBe('Comment  Director');
 });
+
+/**
+ * The language tag is the same kind of text as the title — written by whoever made the file — and
+ * it travels the same road: into the comma-separated stream descriptor (`lang=…`) and on into the
+ * `LANGUAGE="…"` attribute of the master. Only its first subtag used to be looked at, so
+ * `en-US,init_segment=/some/path` passed as English and handed the packager fields of the
+ * uploader's choosing: where to read its input from, where to write its segments.
+ */
+function ingestedLanguage(string $tag): ?string
+{
+    $stream = new FFStream(['index' => 0, 'codec_type' => 'audio', 'tags' => ['language' => $tag]]);
+
+    return (fn () => $this->sourceLanguage($stream))->call(new CreateVideoStreamsService);
+}
+
+it('keeps the language tags a file can honestly carry', function (string $tag, ?string $kept) {
+    expect(ingestedLanguage($tag))->toBe($kept);
+})->with([
+    ['en', 'en'],
+    ['spa', 'spa'],
+    ['es-419', 'es-419'],
+    ['zh-Hant-TW', 'zh-Hant-TW'],
+    [' pt-BR ', 'pt-BR'],
+    // Surrounding whitespace is trimmed off, so nothing of it is stored.
+    ["en\n", 'en'],
+    ['und', null],
+    ['xx', null],
+    ['', null],
+]);
+
+it('drops a language tag that carries anything but a language', function (string $tag) {
+    expect(ingestedLanguage($tag))->toBeNull();
+})->with([
+    'descriptor fields' => 'en-US,init_segment=/tmp/x.mp4,segment_template=/tmp/$Number$.m4s',
+    'another input' => 'en-x,in=/var/www/html/storage/app/other/source.mp4',
+    'a quote' => 'en"',
+    'a playlist tag' => "en\n#EXT-X-KEY:METHOD=NONE",
+    'a space inside' => 'en US',
+    'an equals sign' => 'en-a=b',
+    'an overlong subtag' => 'en-abcdefghi',
+]);
+
+it('refuses the same on the way into the packager, whoever wrote the column', function () {
+    $language = fn (?string $value) => (fn () => self::descriptorLanguage($value))
+        ->call(new PackagerCommandBuilder('packager', 10));
+
+    expect($language('es-419'))->toBe('es-419')
+        ->and($language(null))->toBe('')
+        ->and($language('en-US,hls_name=PWN'))->toBe('')
+        ->and($language("en\n"))->toBe('')
+        ->and($language('en"'))->toBe('');
+});

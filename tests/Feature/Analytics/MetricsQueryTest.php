@@ -222,6 +222,41 @@ it('answers an unscoped query that names its own videos', function () {
     expect($seen['args'][6])->toBeNull();
 });
 
+it('pins an unscoped query that names videos or viewer labels to the caller\'s own account', function (array $payload) {
+    // Naming a video proves nothing about owning it: its ULID is in every playback URL it was
+    // ever given. Unpinned, another tenant's ULIDs broken down by `ip` answered with that
+    // tenant's viewers' addresses. The same goes for tracking ids, which are free text two
+    // tenants can both use.
+    $seen = stubMetricsQuery();
+
+    $this->withHeader('X-Project-Ulid', '')->postJson(METRICS_ENDPOINT, $payload + [
+        'from' => '2026-04-01',
+        'to' => '2026-04-30',
+    ])->assertOk();
+
+    expect($seen['args'][5])->toBe($this->owner->id)
+        ->and($seen['args'][6])->toBeNull();
+})->with([
+    'a foreign video by address' => [['dimensions' => ['video', 'ip', 'country', 'date'], 'videos' => ['01HZXW3V5N8Q9R2T4Y6B8D0F1G']]],
+    'a video filter under a plain total' => [['dimensions' => ['date'], 'videos' => ['01HZXW3V5N8Q9R2T4Y6B8D0F1G']]],
+    'tracking ids' => [['dimensions' => ['tracking_id'], 'trackingIds' => ['42']]],
+    'a tracking id filter under a plain total' => [['dimensions' => ['date', 'metric'], 'trackingIds' => ['42']]],
+]);
+
+it('leaves a project-scoped query to its project, which is already narrower than the account', function () {
+    $seen = stubMetricsQuery();
+
+    $this->postJson(METRICS_ENDPOINT, [
+        'from' => '2026-04-01',
+        'to' => '2026-04-30',
+        'dimensions' => ['video', 'ip'],
+        'videos' => ['01HZXW3V5N8Q9R2T4Y6B8D0F1G'],
+    ])->assertOk();
+
+    expect($seen['args'][5])->toBeNull()
+        ->and($seen['args'][6])->toBe($this->project->id);
+});
+
 it('needs no project context for a query that names no project data', function () {
     stubMetricsQuery();
 
@@ -286,3 +321,26 @@ it('refuses a measure it cannot answer', function (array $payload, string $field
     'a count in the wide shape' => [['shape' => 'wide', 'measures' => ['requests']], 'measures'],
     'a measure that does not exist' => [['measures' => ['median_bytes']], 'measures.0'],
 ]);
+
+it('refuses a range no honest report spans', function (array $range) {
+    // Two valid ISO dates and three and a half million days: a read with one row per day built
+    // all of them in memory before finding the answer too large, for anyone holding a token.
+    stubMetricsQuery();
+
+    $this->postJson(METRICS_ENDPOINT, $range + ['dimensions' => ['date']])
+        ->assertStatus(422)->assertJsonValidationErrors('to');
+})->with([
+    'all of the calendar' => [['from' => '0001-01-01', 'to' => '9999-12-31']],
+    'eleven years' => [['from' => '2015-01-01', 'to' => '2026-01-01']],
+    'backwards' => [['from' => '2026-04-30', 'to' => '2026-04-01']],
+]);
+
+it('answers a range of several years', function () {
+    stubMetricsQuery();
+
+    $this->postJson(METRICS_ENDPOINT, ['from' => '2020-01-01', 'to' => '2026-11-13', 'dimensions' => ['date']])->assertOk();
+});
+
+it('applies the same bound to the dashboard reads', function (string $path) {
+    $this->getJson("/api/{$path}?from=0001-01-01&to=9999-12-31")->assertStatus(422)->assertJsonValidationErrors('to');
+})->with(['analytics', 'analytics/summary', 'analytics/bandwidth', 'analytics/top-ips', 'usage']);

@@ -21,7 +21,10 @@ class CdnSettingsController extends Controller
     public function update(Request $request, CdnSettings $settings, EdgeS3Settings $edgeS3): JsonResponse
     {
         $validated = $request->validate([
-            'tokenSecret' => ['nullable', 'string'],
+            // Hex, in whole bytes: the signer packs it with `H*` and the edge writes it into its
+            // nginx config as it stands, where anything else is either a signature no edge
+            // accepts or a line of config — and an edge that cannot load its config crashloops.
+            'tokenSecret' => ['nullable', 'string', 'max:512', 'regex:/^([0-9a-fA-F]{2})+\z/'],
             'tokenName' => ['required', 'string', 'regex:/^[a-z0-9_]+$/'],
             'tokenWindow' => ['required', 'integer', 'min:1'],
             'bindIp' => ['sometimes', 'boolean'],
@@ -38,7 +41,9 @@ class CdnSettingsController extends Controller
                 'nullable',
                 'string',
                 'max:255',
-                'regex:/^\S+$/D',
+                // What an S3 key can be made of — and, since the edge writes both into its nginx
+                // config, nothing nginx would read as syntax.
+                'regex:/^[A-Za-z0-9\/+=._-]+\z/',
             ],
             'edgeS3.secretAccessKey' => [
                 Rule::requiredIf(fn () => $request->filled('edgeS3.accessKeyId') && (
@@ -47,9 +52,12 @@ class CdnSettingsController extends Controller
                 'nullable',
                 'string',
                 'max:255',
-                'regex:/^\S+$/D',
+                // What an S3 key can be made of — and, since the edge writes both into its nginx
+                // config, nothing nginx would read as syntax.
+                'regex:/^[A-Za-z0-9\/+=._-]+\z/',
             ],
         ], [
+            'tokenSecret.regex' => 'The token secret must be hexadecimal, in whole bytes (an even number of digits).',
             'allowedDomains.*.regex' => 'Each domain must be a bare hostname, like example.com or *.example.com. ":input" is not.',
         ]);
 

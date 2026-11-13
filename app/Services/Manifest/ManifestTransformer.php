@@ -28,5 +28,5 @@ interface ManifestTransformer
      *
      * @param  string  $format  `hls` or `dash`
      */
-    public function transform(string $body, string $format, ManifestOptions $options): string;
+    public function transform(string $body, string $format, string $videoUlid, ManifestOptions $options): string;
 }

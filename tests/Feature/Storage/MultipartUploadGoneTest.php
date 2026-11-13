@@ -62,3 +62,17 @@ it('still fails as a server error when S3 fails for any other reason', function 
     $this->getJson("/api/s3/multipart/{$this->uploadId}?key=".urlencode($this->key))
         ->assertServerError();
 });
+
+it('refuses to complete an upload with parts S3 could not take', function (mixed $parts) {
+    // Nothing is appended to the mock: a request that reached S3 would fail the test on its own.
+    $this->postJson("/api/s3/multipart/{$this->uploadId}/complete?key=".urlencode($this->key), ['parts' => $parts])
+        ->assertStatus(422);
+})->with([
+    'missing' => [null],
+    'a string' => ['all of them'],
+    'a map' => [['a' => ['PartNumber' => 1, 'ETag' => 'x']]],
+    'an entry that is not a part' => [['x']],
+    'a part number out of range' => [[['PartNumber' => 10001, 'ETag' => 'x']]],
+    'a part with no ETag' => [[['PartNumber' => 1]]],
+    'an ETag that is not text' => [[['PartNumber' => 1, 'ETag' => ['x']]]],
+]);

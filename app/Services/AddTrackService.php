@@ -8,6 +8,7 @@ use App\Models\Output;
 use App\Models\Stream;
 use App\Models\Video;
 use App\Observers\StreamObserver;
+use App\Support\MediaSource;
 use App\Support\TrackProbe;
 use App\Support\WebVtt;
 use Illuminate\Support\Facades\Log;
@@ -63,6 +64,12 @@ class AddTrackService
             throw new RuntimeException('The video has no known duration to fit the track to.');
         }
 
+        // Before ffmpeg is pointed at it: a playlist uploaded as "audio" would have the worker
+        // fetch whatever it lists ({@see MediaSource::isPlaylist}).
+        if ($placeholder->type === 'audio' && MediaSource::isPlaylist($this->uploadHead($placeholder->meta['track_upload']))) {
+            throw new RuntimeException('The file is a playlist, not an audio file.');
+        }
+
         $source = $placeholder->type === 'subtitle'
             ? $this->localSubtitle($placeholder, $scratch)
             : Storage::disk('s3')->temporaryUrl($placeholder->meta['track_upload'], now()->addSeconds($timeout + 600));
@@ -81,6 +88,21 @@ class AddTrackService
         }
 
         return $prepared;
+    }
+
+    /** The first bytes of an uploaded track, read off the bucket; empty when it cannot be read. */
+    private function uploadHead(string $key): string
+    {
+        $stream = rescue(fn () => Storage::disk('s3')->readStream($key), null, false);
+
+        if (! is_resource($stream)) {
+            return '';
+        }
+
+        $head = (string) fread($stream, 4096);
+        fclose($stream);
+
+        return $head;
     }
 
     /**

@@ -4,6 +4,7 @@ namespace App\Data\Analytics;
 
 use App\Data\RequestData;
 use App\Http\Controllers\Api\AnalyticsController;
+use App\Support\DateRange;
 use Spatie\LaravelData\Support\Validation\ValidationContext;
 
 /** The query of the shared-address report ({@see AnalyticsController::sharedIps()}). */
@@ -51,8 +52,8 @@ class SharedIpsQueryData extends RequestData
         $minimum = is_numeric($context->payload['minTrackingIds'] ?? null) ? (int) $context->payload['minTrackingIds'] : 3;
 
         return [
-            'from' => 'required|date_format:Y-m-d',
-            'to' => 'required|date_format:Y-m-d|after_or_equal:from',
+            'from' => DateRange::from(),
+            'to' => DateRange::to(),
             'minTrackingIds' => 'nullable|integer|min:2|max:100000',
             // At least the minimum: a ceiling below the floor can only ever answer empty.
             'maxTrackingIds' => 'nullable|integer|min:'.max(2, $minimum).'|max:100000',

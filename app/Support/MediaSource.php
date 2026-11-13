@@ -42,6 +42,63 @@ class MediaSource
     }
 
     /**
+     * Whether a file is a playlist rather than media: an HLS or DASH manifest, an ffmpeg concat
+     * script, an IMF composition. Judged on the first bytes of its content, never on its name —
+     * ffmpeg picks its reader the same way.
+     *
+     * Such a file holds no media of its own; it is a list of OTHER things to read, by path or by
+     * URL, and ffmpeg follows it. As an upload that is a way to make a worker open local files
+     * (another video's scratch copy) and request addresses inside the network, with whatever it
+     * finds encoded into the uploader's own video. Nothing legitimate is lost by refusing them:
+     * a playlist is not a file anyone can have meant to upload as their video.
+     */
+    public static function isPlaylist(string $head): bool
+    {
+        // A byte-order mark and leading whitespace are skipped by the parsers as well.
+        $head = ltrim(preg_replace('/^\xEF\xBB\xBF/', '', $head) ?? $head);
+
+        return str_starts_with($head, '#EXTM3U')
+            || str_starts_with($head, 'ffconcat version')
+            || (bool) preg_match('/<(MPD|CompositionPlaylist|SmoothStreamingMedia)[\s>]/i', substr($head, 0, 4096));
+    }
+
+    /** The first bytes of a local file, for {@see isPlaylist}; empty when it cannot be read. */
+    public static function head(string $path, int $bytes = 4096): string
+    {
+        $handle = @fopen($path, 'rb');
+
+        if ($handle === false) {
+            return '';
+        }
+
+        $head = (string) fread($handle, $bytes);
+        fclose($handle);
+
+        return $head;
+    }
+
+    /**
+     * Where the container's timestamps start, in seconds: what ffmpeg's input `-ss` counts from,
+     * and what ffprobe's packet times do NOT count from. Zero for most files; hours for a
+     * transport stream captured off air. Zero as well when it cannot be read, which is the common
+     * case and never moves a timestamp the wrong way.
+     */
+    public static function startTime(string $source): float
+    {
+        try {
+            $probe = Process::timeout(60)->run([
+                'ffprobe', '-v', 'error', '-show_entries', 'format=start_time', '-of', 'csv=p=0', $source,
+            ]);
+        } catch (ProcessTimedOutException) {
+            return 0.0;
+        }
+
+        $value = trim($probe->output());
+
+        return is_numeric($value) ? max(0.0, (float) $value) : 0.0;
+    }
+
+    /**
      * How many packets of `$track` the source holds with a presentation time in [$from, $to),
      * both counted from the file's start as an input `-ss` counts them. Null when it can't be
      * read — never a count the caller could mistake for an answer.

@@ -245,3 +245,21 @@ the request path (master manifests are answered by the API) and the two edge var
   distinct set of options, renewed by each mint.
 - **One cache entry per (manifest, options)**, 30 s. The separate cache of the source manifest
   was dropped.
+- **After review (three independent reviewers):**
+  - The manifest file name is matched by the API route's own pattern everywhere. The first edge
+    version matched `[^/]+` and copied it decoded into the request to the API: a header injection
+    that let a link holder choose another link's options.
+  - The fallback moved inside the `:8081` hop (`error_page … = @bucket`), for any answer that is
+    not a manifest. No `proxy_next_upstream`, no passive health check that one bad response
+    could trip for the whole edge.
+  - The edge caches master manifests again, keyed `{path}|{mo}`: 30 s for the API's answer, 10 s
+    for the bucket's. The API-side cache was removed, so an edit still shows within 30 s.
+  - Per-address rate (20/s) and in-flight (10) limits on uncached manifests, and a ceiling of 64
+    connections from an edge to the API; over any of them the bucket answers.
+  - The edge forwards nothing of the viewer's request to the API but the token, and hides the
+    API's own response headers.
+- **The sidecar's `BaseURL` is root-relative** (`/{video}/play/{stream}/sub.vtt`). Relative to the
+  manifest it broke ffmpeg-based players outright: the manifest's URL carries the token, whose ACL
+  has slashes, and ffmpeg's DASH reader resolves a relative `BaseURL` by cutting at the last
+  slash. Verified with ffprobe and, in headless Chromium, with Shaka Player, dash.js and hls.js.
+- **Tokens carry a nonce** (`~n=`), so nothing recorded against a token can collide between mints.
