@@ -283,6 +283,16 @@ serve, and you pick from it.
         "videoCodec": "av1",
         "audioCodec": "opus"
       }
+    ],
+    "subtitles": [
+      {
+        "url": "https://cdn.example.com/01HX.../download/subtitle/01J1....vtt?token=...",
+        "streamUlid": "01J1...",
+        "language": "es",
+        "name": "Español",
+        "forced": false,
+        "hearingImpaired": false
+      }
     ]
   }
 }
@@ -305,6 +315,35 @@ one whose streams were all deleted. A video is `completed` once at least one out
 failed sibling is an ordinary state and does not cost the others their links. `sources` can come
 back empty, still as a `200`: the video exists and you are entitled to it, there is just nothing to
 play.
+
+### Standalone subtitles
+
+`subtitles` lists every subtitle track of the video as a standalone WebVTT file, for a player that
+does not read its text tracks from the manifest and has to be handed them one by one — a
+`<track src>` element, `addRemoteTextTrack()`, a custom transcript view. **The same tracks are
+already inside every manifest in `sources`**, so a player that takes them from there needs nothing
+from this list, and loading both shows each language twice.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `url` | string | The signed `.vtt`: the whole track in one file, cue times on the video's own timeline. The token is in the URL, so it works where no header can be added. |
+| `streamUlid` | string | The track, matching an entry of `streams[]` on [Get Video](#get-video). |
+| `language` | string \| null | The track's language as stored on the stream; `null` when the source did not tag it. |
+| `name` | string \| null | The label to show in a menu. |
+| `forced` | boolean | A track of foreign-language dialogue only, meant to be shown without the viewer turning subtitles on. |
+| `hearingImpaired` | boolean | SDH: sound descriptions as well as dialogue. |
+
+The list is empty, never absent, when the video has no subtitles. A track still being
+[added](/api/streams#add-a-track), or whose add failed, is left out until its file exists.
+
+These links differ from the manifest ones in three ways. Each is signed for its **one file**, where
+a manifest link covers the whole playback directory. They are **not bound to the viewer's IP**, even
+with [IP binding](/guide/cdn#ip-binding) on, and `speedLimitKbps` does not apply to them — a few
+kilobytes of text is not what either protects. And their bytes are booked as `download_bytes` in
+[analytics](/api/analytics), under the same `trackingId`, because they are served from the download
+zone. The self-hosted edge sends them with open CORS, so a cross-origin
+`<track crossorigin="anonymous">` loads them; on Bunny that is the pull zone's own CORS setting,
+which has to include `vtt`.
 
 Every URL in one answer expires at the same `expiresAt`: they are signed in the same request
 against the same provider window. Responds `409` while the video is still processing and `503`
@@ -351,7 +390,8 @@ them. Each entry is what [Playback URLs](#playback-urls) answers for that video,
       "expiresAt": "2025-01-15T11:30:00+00:00",
       "sources": [
         { "url": "https://cdn.example.com/01HX.../play/01HZ....m3u8", "format": "hls", "outputUlid": "01HZ...", "videoCodec": "h264", "audioCodec": "aac" }
-      ]
+      ],
+      "subtitles": []
     }
   ]
 }

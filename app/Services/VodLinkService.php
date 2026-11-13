@@ -4,9 +4,13 @@ namespace App\Services;
 
 use App\Data\VideoVodLinksData;
 use App\Data\VodSourceData;
+use App\Data\VodSubtitleData;
+use App\Enums\StreamStatus;
 use App\Enums\VideoStatus;
 use App\Exceptions\NoCdnNodeAvailableException;
+use App\Jobs\PackageVideoJob;
 use App\Models\Output;
+use App\Models\Stream;
 use App\Models\Video;
 use App\Services\Cdn\AssetUrlResolver;
 use App\Services\Cdn\BunnyProvider;
@@ -181,7 +185,76 @@ class VodLinkService
             storyboardUrl: $this->assets->for($video->ulid, Video::STORYBOARD_VTT_FILENAME),
             expiresAt: $expiresAt,
             sources: $sources,
+            subtitles: $this->subtitles($video, $lifetime, $signed),
         );
+    }
+
+    /**
+     * The video's subtitle tracks as standalone `.vtt` links, for a player that cannot read its
+     * text tracks out of the manifest.
+     *
+     * These point at the DOWNLOAD zone, not at the packaged track next to the manifest, because
+     * the two are different files. What sits in `play/` is a packager segment — fragmented MP4 for
+     * DASH, and for HLS a WebVTT that only an HLS client resolves against the playlist around it —
+     * while the download zone holds the sanitized WebVTT the packager was fed: one plain file a
+     * `<track>` element loads as it is. It is also there for every video, whatever the template's
+     * `keep_processed_files` says ({@see PackageVideoJob::OPTIONAL_TYPES}).
+     *
+     * So each one is a download signature: scoped to its own object, and not bound to the viewer's
+     * address ({@see CdnProvider::downloadUrl}). Neither costs anything here — a subtitle is the
+     * one track whose content is no more valuable than the playback it accompanies — and the edge
+     * answers that zone with the same open CORS a cross-origin `<track>` needs.
+     *
+     * No speed limit is signed in: it exists to shape the video's bitrate, and all it could do to
+     * a file of a few kilobytes is delay the first cue.
+     *
+     * Appends what it signs to `$signed` like the manifests, so a tracking id covers these too.
+     *
+     * @param  list<SignedLink>  $signed
+     * @return list<VodSubtitleData>
+     */
+    private function subtitles(Video $video, int $lifetime, array &$signed): array
+    {
+        $subtitles = [];
+
+        foreach ($video->streams->sortBy('id') as $stream) {
+            if (! $this->isServableSubtitle($stream)) {
+                continue;
+            }
+
+            try {
+                $link = $this->cdn->downloadUrl($video->ulid, $stream->storedPath($video), app()->isLocal(), expiresIn: $lifetime);
+            } catch (NoCdnNodeAvailableException) {
+                abort(503, 'No node available');
+            }
+
+            $signed[] = $link;
+
+            $subtitles[] = new VodSubtitleData(
+                url: $link->url,
+                streamUlid: $stream->ulid,
+                language: $stream->language,
+                name: $stream->name,
+                forced: (bool) $stream->forced,
+                hearingImpaired: (bool) data_get($stream->meta, 'hearing_impaired', false),
+            );
+        }
+
+        return $subtitles;
+    }
+
+    /**
+     * A subtitle whose file is actually in the download zone. `file_size` is the record of that
+     * ({@see DownloadLinkService::forStream}): it is written from the file that was synced, so a
+     * track still being added, or one whose add failed, has none and is left out rather than
+     * handed out as a link that 404s at the CDN. The status check covers the same two states by
+     * name; a null status is a track of the video's own run, which is ready by definition.
+     */
+    private function isServableSubtitle(Stream $stream): bool
+    {
+        return $stream->type === 'subtitle'
+            && $stream->file_size !== null
+            && in_array($stream->status, [null, StreamStatus::READY], true);
     }
 
     /**
