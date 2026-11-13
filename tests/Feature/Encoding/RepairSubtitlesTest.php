@@ -1,9 +1,12 @@
 <?php
 
+use App\Data\Video\ManifestOptions;
+use App\Enums\SubtitleFormat;
 use App\Models\Project;
 use App\Models\Stream;
 use App\Models\User;
 use App\Models\Video;
+use App\Services\Manifest\SubtitleFormatTransformer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -98,6 +101,32 @@ it('grafts the subtitles back into a manifest that lost them', function () {
         expect(Storage::disk('s3')->exists("{$stream->segmentsPath($video)}/init.mp4"))->toBeTrue()
             ->and(Storage::disk('s3')->exists("{$stream->segmentsPath($video)}/1.m4s"))->toBeTrue();
     }
+});
+
+it('publishes each repaired track as a plain sidecar the manifest can be pointed at', function () {
+    $video = publishedWithoutSubtitles();
+
+    $this->artisan('videos:repair-subtitles', ['video' => [$video->ulid]])->assertSuccessful();
+
+    foreach ($video->streams()->where('type', 'subtitle')->get() as $stream) {
+        $sidecar = (string) Storage::disk('s3')->get("{$stream->segmentsPath($video)}/sub.vtt");
+
+        // The whole track as one file a `<track>` or a DASH text Representation loads as it is.
+        expect($sidecar)->toStartWith('WEBVTT')->toContain('-->');
+    }
+
+    // The real packager's text sets, rewritten for a link that asked for plain WebVTT.
+    $mpd = (new SubtitleFormatTransformer)->transform(
+        (string) Storage::disk('s3')->get("{$video->playPrefix()}/OUTPUT.mpd"),
+        'dash',
+        new ManifestOptions(subtitlesFormat: SubtitleFormat::VTT),
+    );
+
+    expect(substr_count($mpd, '/sub.vtt</BaseURL>'))->toBe(2)
+        ->and(substr_count($mpd, 'mimeType="text/vtt"'))->toBe(2)
+        ->and($mpd)->not->toContain('wvtt')
+        ->and(substr_count($mpd, 'contentType="text"'))->toBe(2)
+        ->and($mpd)->toContain('VIDEO/init.mp4');
 });
 
 it('leaves a manifest that already carries subtitles alone', function () {

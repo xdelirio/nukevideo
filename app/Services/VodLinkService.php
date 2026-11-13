@@ -2,10 +2,12 @@
 
 namespace App\Services;
 
+use App\Data\Video\ManifestOptions;
 use App\Data\VideoVodLinksData;
 use App\Data\VodSourceData;
 use App\Data\VodSubtitleData;
 use App\Enums\StreamStatus;
+use App\Enums\SubtitleFormat;
 use App\Enums\VideoStatus;
 use App\Exceptions\NoCdnNodeAvailableException;
 use App\Jobs\PackageVideoJob;
@@ -14,11 +16,13 @@ use App\Models\Stream;
 use App\Models\Video;
 use App\Services\Cdn\AssetUrlResolver;
 use App\Services\Cdn\EdgeLinkSigner;
+use App\Services\Cdn\ManifestOptionsRegistry;
 use App\Services\Cdn\ProxyRing;
 use App\Services\Cdn\SignedLink;
 use App\Services\Cdn\TrackingRegistry;
 use App\Support\LinkExpiry;
 use App\Support\SpeedLimit;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Mints a whole video's playback links in one pass.
@@ -42,6 +46,7 @@ class VodLinkService
         private EdgeLinkSigner $cdn,
         private TrackingRegistry $tracking,
         private AssetUrlResolver $assets,
+        private ManifestOptionsRegistry $manifestOptions,
     ) {}
 
     /**
@@ -66,16 +71,18 @@ class VodLinkService
         ?int $speedLimitKbps = null,
         bool $download = false,
         ?int $expiresIn = null,
+        ?SubtitleFormat $subtitlesFormat = null,
     ): VideoVodLinksData {
         if ($video->status !== VideoStatus::COMPLETED->value) {
             abort(409, 'The video is still processing.');
         }
 
         SpeedLimit::ensureSupported($this->cdn, $speedLimitKbps);
+        $manifestKey = $this->manifestKey($resolution, $subtitlesFormat);
         $lifetime = LinkExpiry::seconds($expiresIn, $this->tracking);
         $signed = [];
 
-        $links = $this->links($video, $resolution, $ip, $speedLimitKbps, $lifetime, now()->addSeconds($lifetime)->toIso8601String(), $signed);
+        $links = $this->links($video, $ip, $speedLimitKbps, $lifetime, now()->addSeconds($lifetime)->toIso8601String(), $signed, $manifestKey);
 
         // One cache round trip for the whole answer rather than one per manifest.
         $this->tracking->recordMany($signed, $trackingId, $download, $lifetime);
@@ -106,8 +113,10 @@ class VodLinkService
         ?int $speedLimitKbps = null,
         bool $download = false,
         ?int $expiresIn = null,
+        ?SubtitleFormat $subtitlesFormat = null,
     ): array {
         SpeedLimit::ensureSupported($this->cdn, $speedLimitKbps);
+        $manifestKey = $this->manifestKey($resolution, $subtitlesFormat);
         $lifetime = LinkExpiry::seconds($expiresIn, $this->tracking);
         $expiresAt = now()->addSeconds($lifetime)->toIso8601String();
 
@@ -123,7 +132,7 @@ class VodLinkService
             $video = $byUlid[$ulid] ?? null;
 
             if ($video !== null && $video->status === VideoStatus::COMPLETED->value) {
-                $answer[] = $this->links($video, $resolution, $ip, $speedLimitKbps, $lifetime, $expiresAt, $signed);
+                $answer[] = $this->links($video, $ip, $speedLimitKbps, $lifetime, $expiresAt, $signed, $manifestKey);
             }
         }
 
@@ -133,12 +142,36 @@ class VodLinkService
     }
 
     /**
+     * The key this mint's manifest links carry for what it asks of them — null when it asks for
+     * nothing but the defaults. Refused up front when it cannot be honoured.
+     *
+     * The key rides in each link's token, so a deployment that does not sign has nowhere to put
+     * it, and every manifest it serves is built with the defaults. A 422 for the same reason a
+     * speed limit gets one ({@see SpeedLimit::ensureSupported}): the caller asked because
+     * something depends on it, and a link that silently ignores it is the one answer they cannot
+     * detect.
+     */
+    private function manifestKey(?int $resolution, ?SubtitleFormat $subtitlesFormat): ?string
+    {
+        $options = new ManifestOptions($resolution, $subtitlesFormat ?? SubtitleFormat::VTT);
+
+        if (! $options->isDefault() && ! $this->cdn->signs()) {
+            throw ValidationException::withMessages([
+                $resolution !== null ? 'resolution' : 'subtitlesFormat' => 'Unsigned links cannot carry manifest options.',
+            ]);
+        }
+
+        return $this->manifestOptions->keyFor($options);
+    }
+
+    /**
      * One video's answer. Appends every link it signs to `$signed`, for the caller to attribute
      * all of them in one write.
      *
      * @param  list<SignedLink>  $signed
+     * @param  string|null  $manifestKey  what the manifest links are built with ({@see manifestKey})
      */
-    private function links(Video $video, ?int $resolution, string $ip, ?int $speedLimitKbps, int $lifetime, string $expiresAt, array &$signed): VideoVodLinksData
+    private function links(Video $video, string $ip, ?int $speedLimitKbps, int $lifetime, string $expiresAt, array &$signed, ?string $manifestKey): VideoVodLinksData
     {
         $sources = [];
 
@@ -152,15 +185,13 @@ class VodLinkService
                 continue;
             }
 
-            // Resolved once per output, not once per format: the cap depends on the output's own
-            // renditions and the caller's ceiling, and both manifests of one output are the same
-            // ladder. The same holds for the codecs, which cost a pass over the streams each.
-            $cap = $output->resolveCap($resolution);
+            // Resolved once per output, not once per format: the codecs cost a pass over the
+            // streams each, and both manifests of one output carry the same ones.
             $videoCodec = $output->videoCodec();
             $audioCodec = $output->audioCodec();
 
             foreach ($formats as $format) {
-                $link = $this->sign($video, $output->manifestPath($format, $cap), $ip, $speedLimitKbps, $lifetime);
+                $link = $this->sign($video, $output->manifestPath($format), $ip, $speedLimitKbps, $lifetime, $manifestKey);
                 $signed[] = $link;
 
                 $sources[] = new VodSourceData(
@@ -275,10 +306,10 @@ class VodLinkService
      * The node behind this is resolved once per request, not once per call ({@see ProxyRing}),
      * which is what makes signing in a loop cheap.
      */
-    private function sign(Video $video, string $path, string $ip, ?int $speedLimitKbps, int $lifetime): SignedLink
+    private function sign(Video $video, string $path, string $ip, ?int $speedLimitKbps, int $lifetime, ?string $manifestKey): SignedLink
     {
         try {
-            return $this->cdn->manifestUrl($video, $path, $ip, $speedLimitKbps, $lifetime);
+            return $this->cdn->manifestUrl($video, $path, $ip, $speedLimitKbps, $lifetime, $manifestKey);
         } catch (NoCdnNodeAvailableException) {
             // The same answer the per-output mint gives: the video exists and the caller is
             // entitled to it, there is just nothing to serve it right now.

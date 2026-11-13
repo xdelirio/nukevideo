@@ -222,6 +222,15 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
   comes from a different sequence than a user's, so reading it as a user id silently answers with
   another account's data — use `$request->user()->accountId()`, which both models implement.
   `is_admin` needs nothing: the attribute is simply absent on a Project, so Eloquent answers null.
+- Master manifests are not served from the bucket: the edge asks `GET internal/manifests/{video}/{file}`
+  and `DynamicManifestService` builds them from the options the link's token names: an opaque
+  `mo` key signed into the token, resolved by `ManifestOptionsRegistry` to a `ManifestOptions`.
+  The key must stay IN the token — tokens are not unique per mint, so anything merely filed under
+  one would cross between viewers. A new personalization is one `ManifestTransformer`
+  plus one option property — no edge change. That endpoint runs on every playback start and
+  touches no database, on purpose; and it must stay viewer-agnostic, because built copies are
+  shared by every link with equal options. When the API is unreachable the edge falls back to the
+  static manifest, so nothing built here may be an entitlement yet.
 - Metrics live in MariaDB, in `usage_daily`: one row per day per combination of dimensions, and
   the unique key over those dimensions IS the aggregation. Every write goes through
   `UsageService::add()`, which upserts `value = value + new`; a plain insert or an Eloquent

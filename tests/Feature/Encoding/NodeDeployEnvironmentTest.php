@@ -259,9 +259,24 @@ describe('what the edge container is given', function () {
 
         expect($args)->not->toBe('');
 
-        foreach (['DB_PASSWORD=', 'REDIS_PASSWORD=', 'APP_KEY=', 'WEBHOOK_SECRET=', 'INTERNAL_API_SECRET=', 'SENTRY_LARAVEL_DSN='] as $variable) {
+        // INTERNAL_API_SECRET is not in this list: the edge asks the API for master manifests with it.
+        foreach (['DB_PASSWORD=', 'REDIS_PASSWORD=', 'APP_KEY=', 'WEBHOOK_SECRET=', 'SENTRY_LARAVEL_DSN='] as $variable) {
             expect($args)->not->toContain($variable);
         }
+    });
+
+    it('hands the edge what it asks the API for master manifests with', function () use ($runArgs) {
+        $args = $runArgs(deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com']));
+
+        expect($args)->toContain('INTERNAL_API_URL=')
+            ->and($args)->toContain('INTERNAL_API_SECRET=internal-secret');
+    });
+
+    it('does not let a node point its own edge at another manifest API', function () use ($runArgs) {
+        $args = $runArgs(deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'env' => "INTERNAL_API_SECRET=mine\nINTERNAL_API_URL=http://evil.example"]));
+
+        expect($args)->not->toContain('INTERNAL_API_SECRET=mine')
+            ->and($args)->not->toContain('evil.example');
     });
 
     it('leaves out a credential set in the node environment too', function () use ($runArgs) {

@@ -35,10 +35,12 @@ class EdgeLinkSigner
      *
      * @param  string  $path  host-relative manifest path ({videoUlid}/{file})
      * @param  int|null  $speedLimitKbps  signed into the token, so it reaches every segment the
-     *                                    manifest lists; only when {@see supportsSpeedLimit}
+     *                                    manifest lists; only when {@see signs}
      * @param  int|null  $expiresIn  seconds the link stays valid; null for the token window
+     * @param  string|null  $manifestKey  names the options the link's manifests are built with
+     *                                    ({@see ManifestOptionsRegistry}); null for the defaults
      */
-    public function manifestUrl(Video $video, string $path, string $ip, ?int $speedLimitKbps = null, ?int $expiresIn = null): SignedLink
+    public function manifestUrl(Video $video, string $path, string $ip, ?int $speedLimitKbps = null, ?int $expiresIn = null, ?string $manifestKey = null): SignedLink
     {
         $node = $this->ring->for($video->ulid);
 
@@ -48,7 +50,7 @@ class EdgeLinkSigner
 
         $url = Node::proxyScheme()."{$node->hostname}/".ltrim($path, '/');
 
-        return $this->sign($url, $ip, speedLimitKbps: $speedLimitKbps, expiresIn: $expiresIn);
+        return $this->sign($url, $ip, speedLimitKbps: $speedLimitKbps, expiresIn: $expiresIn, manifestKey: $manifestKey);
     }
 
     /**
@@ -108,14 +110,15 @@ class EdgeLinkSigner
     }
 
     /**
-     * Whether a link minted right now can carry a speed limit the edge enforces. Only a signed
-     * link can: the limit is a field of the token, and with no secret there is no token to put
-     * it in.
+     * Whether links are signed at all. Everything that rides on a link's token depends on it: the
+     * speed limit is a field of the token, and so is the key naming the options a manifest is
+     * built from ({@see ManifestOptionsRegistry}). With no secret there is no token to put either
+     * in.
      *
      * Asked before minting rather than discovered while signing, so a refusal is one 422 for the
      * whole request instead of an exception halfway through a batch.
      */
-    public function supportsSpeedLimit(): bool
+    public function signs(): bool
     {
         return $this->settings->token_secret !== '';
     }
@@ -131,7 +134,7 @@ class EdgeLinkSigner
      * `map` ({@see vod/nginx/nginx.conf.template}). An edge that predates the map still validates
      * the token and simply serves it unlimited.
      */
-    private function sign(string $url, ?string $ip, ?string $acl = null, ?int $speedLimitKbps = null, ?int $expiresIn = null): SignedLink
+    private function sign(string $url, ?string $ip, ?string $acl = null, ?int $speedLimitKbps = null, ?int $expiresIn = null, ?string $manifestKey = null): SignedLink
     {
         if ($this->settings->token_secret === '') {
             if ($speedLimitKbps !== null) {
@@ -156,6 +159,15 @@ class EdgeLinkSigner
 
         if ($speedLimitKbps !== null) {
             $authString .= '~limit='.SpeedLimit::toBytesPerSecond($speedLimitKbps);
+        }
+
+        // Which manifest options the link was minted with, as an opaque key — a field the edge's
+        // validator ignores and signs, like `limit`. It has to be IN the token, not merely filed
+        // under it: a token is otherwise its expiry and its ACL, so two viewers minting the same
+        // video within one second hold the same one, and whatever was filed under it answered
+        // for both. With the key inside, equal tokens can only mean equal options.
+        if ($manifestKey !== null) {
+            $authString .= '~'.ManifestOptionsRegistry::TOKEN_FIELD."={$manifestKey}";
         }
         $hmac = hash_hmac('sha256', $authString, pack('H*', $this->settings->token_secret));
         $token = "{$authString}~hmac={$hmac}";

@@ -4,7 +4,9 @@ namespace App\Services;
 
 use App\Console\Commands\RepairSubtitlesCommand;
 use App\Jobs\PackageVideoJob;
+use App\Models\Stream;
 use App\Models\Video;
+use App\Services\Manifest\SubtitleFormatTransformer;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
@@ -130,6 +132,8 @@ class SubtitlePackager
         );
 
         if ($result->successful()) {
+            $this->writeSidecars($subs, $dir);
+
             return true;
         }
 
@@ -140,6 +144,31 @@ class SubtitlePackager
         ]);
 
         return false;
+    }
+
+    /**
+     * Leave each packaged track's whole WebVTT next to its segments, as `{ulid}/sub.vtt`
+     * ({@see Stream::SIDECAR_VTT}) — what a DASH manifest names for a link that asked for plain
+     * `.vtt` subtitles ({@see SubtitleFormatTransformer}).
+     *
+     * Written here, into the tree every caller already uploads whole, so the file reaches the
+     * playback zone with the segments it sits beside and is deleted with them. And only for a run
+     * that succeeded: a track the packager refused has no entry in any manifest to point at it.
+     * Once per format the caller packages, which rewrites the same bytes.
+     *
+     * @param  list<array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}>  $subs
+     */
+    private function writeSidecars(array $subs, string $dir): void
+    {
+        foreach ($subs as $sub) {
+            $target = "{$dir}/{$sub['ulid']}/".Stream::SIDECAR_VTT;
+
+            // Non-critical like the rest of this class: without the file the track simply keeps
+            // its packaged form for those links.
+            if (! is_dir(dirname($target)) || ! @copy($sub['path'], $target)) {
+                Log::warning('Could not write a subtitle sidecar', ['track' => $sub['ulid']]);
+            }
+        }
     }
 
     /**

@@ -1,34 +1,79 @@
 #!/bin/sh
 set -e
 
-# The S3 endpoint, taken apart for the `s3_origin` upstream: a `server` there takes host:port
-# with no scheme, and its default port is 80 whatever the scheme — so an https endpoint with no
-# port would have been dialled in TLS on port 80. A trailing path (`https://s3.host/`) is dropped.
-AWS_ENDPOINT_SCHEME=$(echo "$AWS_ENDPOINT" | sed -n 's|^\([A-Za-z]*\)://.*|\1|p' | tr 'A-Z' 'a-z')
-export AWS_ENDPOINT_SCHEME="${AWS_ENDPOINT_SCHEME:-https}"
-export AWS_ENDPOINT_HOST=$(echo "$AWS_ENDPOINT" | sed 's|^[A-Za-z]*://||; s|/.*$||')
-# A port is what follows the last colon — except inside an IPv6 literal's brackets.
-case "$AWS_ENDPOINT_HOST" in
-    \[*\]:*|[!\[]*:*) export AWS_ENDPOINT_SERVER="$AWS_ENDPOINT_HOST" ;;
-    *) [ "$AWS_ENDPOINT_SCHEME" = "https" ] && PORT=443 || PORT=80
-       export AWS_ENDPOINT_SERVER="$AWS_ENDPOINT_HOST:$PORT" ;;
-esac
+# ---- Upstreams ----
+#
+# The edge talks to two servers it is told about by URL: the bucket and the API. nginx wants each
+# taken apart, and this does it the same way for both:
+#
+#   <NAME>_SCHEME   http or https
+#   <NAME>_HOST     as written in the URL, port included, for the Host header
+#   <NAME>_NAME     the host alone, which is what a TLS certificate names
+#   <NAME>_SERVER   host:port for the `upstream`. Its `server` takes no scheme and defaults to
+#                   port 80 whatever the scheme, so an https URL with no port would otherwise be
+#                   dialled in TLS on port 80
+#   <NAME>_RESOLVE  `resolve` when the host is a name, so nginx follows it when its addresses
+#                   move; empty for an IP address, on which nginx refuses the flag
+#
+# A path after the host is dropped. A port is what follows the last colon, except inside an IPv6
+# literal's brackets.
+split_url() {
+    scheme=$(echo "$2" | sed -n 's|^\([A-Za-z]*\)://.*|\1|p' | tr 'A-Z' 'a-z')
+    scheme=${scheme:-$3}
+    host=$(echo "$2" | sed 's|^[A-Za-z]*://||; s|/.*$||')
 
-# Who re-resolves the endpoint while nginx runs: the container's own nameserver (Docker's
-# embedded DNS on the deploy's network). An IPv6 one needs brackets in `resolver`. An endpoint
-# that is an IP address has nothing to re-resolve, and nginx refuses `resolve` on it.
+    case "$host" in
+        \[*\]:*|[!\[]*:*) server=$host ;;
+        *) [ "$scheme" = "https" ] && server="$host:443" || server="$host:80" ;;
+    esac
+
+    name=${server%:*}
+
+    if echo "$name" | grep -qE '^[0-9.]+$|^\['; then
+        resolve=""
+    else
+        resolve="resolve"
+    fi
+
+    export "$1_SCHEME=$scheme" "$1_HOST=$host" "$1_NAME=$name" "$1_SERVER=$server" "$1_RESOLVE=$resolve"
+}
+
+# Who answers those `resolve`s while nginx runs: the container's own nameserver (Docker's embedded
+# DNS on the deploy's network). An IPv6 one needs brackets in `resolver`.
 EDGE_RESOLVER=$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf 2>/dev/null)
 case "$EDGE_RESOLVER" in
     "") EDGE_RESOLVER=127.0.0.11 ;;
     *:*) EDGE_RESOLVER="[$EDGE_RESOLVER]" ;;
 esac
 export EDGE_RESOLVER
-ENDPOINT_NAME=${AWS_ENDPOINT_SERVER%:*}
-if echo "$ENDPOINT_NAME" | grep -qE '^[0-9.]+$|^\['; then
-    export AWS_ENDPOINT_RESOLVE=""
+
+# The bucket (`s3_origin`).
+split_url AWS_ENDPOINT "$AWS_ENDPOINT" https
+
+# The API, which builds master manifests (`manifest_origin`): the internal URL and secret Vector
+# ships the access log with. Without both, the edge serves manifests from the bucket as it always
+# did — an edge run by hand, or deployed by a panel that predates this, keeps working. The secret
+# is written into nginx config inside a quoted string, so one that could end the string or start a
+# variable counts as missing rather than crashlooping the edge. `manifest_api` still has to name
+# a server for nginx to load; unconfigured, it is a port nothing listens on and nothing routes to.
+MANIFEST_API_URL="${INTERNAL_API_URL:-}"
+export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-}"
+case "$INTERNAL_API_SECRET" in
+    *[!A-Za-z0-9._~+/=-]*) INTERNAL_API_SECRET="" ;;
+esac
+
+if [ -n "$MANIFEST_API_URL" ] && [ -n "$INTERNAL_API_SECRET" ]; then
+    export MANIFEST_UPSTREAM=manifest_origin
+    echo "manifest API: $MANIFEST_API_URL"
 else
-    export AWS_ENDPOINT_RESOLVE="resolve"
+    export MANIFEST_UPSTREAM=edge_origin
+    MANIFEST_API_URL=http://127.0.0.1:9
+    echo "manifest API: not configured, serving manifests from the bucket"
 fi
+
+split_url MANIFEST_API "$MANIFEST_API_URL" http
+# What follows the host, e.g. `/api/internal`: the manifest route hangs off it.
+export MANIFEST_API_PATH=$(echo "$MANIFEST_API_URL" | sed 's|^[A-Za-z]*://[^/]*||; s|/*$||')
 
 # The query argument carrying the token. Must match what the API signs with; the default is the
 # Akamai name the signer also defaults to, so a node that predates this variable keeps working.
@@ -168,7 +213,7 @@ echo "cache: $CACHE_DIR ${TOTAL_MB}MB total, max_size=$VOD_CACHE_MAX_SIZE min_fr
 # The node id only identifies the edge to the health probe; an edge run by hand has none.
 export NODE_ID="${NODE_ID:-0}"
 
-FILTER_VARS='$NODE_ID $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY $AWS_DEFAULT_REGION $AWS_ENDPOINT_SCHEME $AWS_ENDPOINT_HOST $AWS_ENDPOINT_SERVER $AWS_ENDPOINT_RESOLVE $EDGE_RESOLVER $AWS_BUCKET $VOD_CACHE_MAX_SIZE $VOD_CACHE_MIN_FREE $VOD_CACHE_KEYS_ZONE $VOD_CACHE_INACTIVE $VOD_TOKEN_SECRET $VOD_TOKEN_NAME $VOD_S3_TLS_VERIFY'
+FILTER_VARS='$NODE_ID $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY $AWS_DEFAULT_REGION $AWS_ENDPOINT_SCHEME $AWS_ENDPOINT_HOST $AWS_ENDPOINT_SERVER $AWS_ENDPOINT_RESOLVE $EDGE_RESOLVER $AWS_BUCKET $VOD_CACHE_MAX_SIZE $VOD_CACHE_MIN_FREE $VOD_CACHE_KEYS_ZONE $VOD_CACHE_INACTIVE $VOD_TOKEN_SECRET $VOD_TOKEN_NAME $VOD_S3_TLS_VERIFY $MANIFEST_API_SCHEME $MANIFEST_API_HOST $MANIFEST_API_NAME $MANIFEST_API_SERVER $MANIFEST_API_RESOLVE $MANIFEST_API_PATH $MANIFEST_UPSTREAM $INTERNAL_API_SECRET'
 envsubst "$FILTER_VARS" < /usr/local/nginx/conf/nginx.conf.template > /usr/local/nginx/conf/nginx.conf
 
 /usr/local/nginx/sbin/nginx -t

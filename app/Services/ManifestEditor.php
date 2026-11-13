@@ -41,7 +41,7 @@ class ManifestEditor
      * (which only rewrites bodies of these types) stops signing segment URLs → players 403. Flysystem
      * would otherwise sniff `text/xml`/`text/plain`. Mirrors what `s5cmd sync` sets by extension.
      */
-    private const CONTENT_TYPES = [
+    public const CONTENT_TYPES = [
         'dash' => 'application/dash+xml',
         'hls' => 'application/vnd.apple.mpegurl',
     ];

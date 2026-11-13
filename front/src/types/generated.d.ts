@@ -576,6 +576,10 @@ sort: string,
 direction: string,
 perPage: number,
 };
+export type ManifestOptions = {
+resolution: number | null,
+subtitlesFormat: App.Enums.SubtitleFormat,
+};
 export type PlayVideoData = {
 resolution: number | null,
 ip: string | null,
@@ -583,6 +587,7 @@ trackingId: string | null,
 speedLimitKbps: number | null,
 download: boolean | null,
 expiresIn: number | null,
+subtitlesFormat: App.Enums.SubtitleFormat | null,
 };
 export type PlayVideosData = {
 videos: string[],
@@ -592,6 +597,7 @@ trackingId: string | null,
 speedLimitKbps: number | null,
 download: boolean | null,
 expiresIn: number | null,
+subtitlesFormat: App.Enums.SubtitleFormat | null,
 };
 export type UpdateVideoData = {
 name: string,
@@ -611,6 +617,7 @@ export type NodeAccel = 'intel' | 'nvidia';
 export type NodeAction = 'deploy' | 'start' | 'stop';
 export type NodeType = 'worker' | 'proxy';
 export type StreamStatus = 'processing' | 'ready' | 'failed';
+export type SubtitleFormat = 'segments' | 'vtt';
 export type UsageGranularity = 'total' | 'daily';
 export type UsageMetric = 'upload_bytes' | 'encoding_cpu' | 'streaming_bytes' | 'download_bytes' | 'asset_bytes' | 'bandwidth_bytes' | 'origin_bytes';
 export type VideoPriority = 'low' | 'normal' | 'high';

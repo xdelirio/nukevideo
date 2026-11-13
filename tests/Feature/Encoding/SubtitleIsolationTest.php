@@ -67,3 +67,35 @@ it('does not retry a lone track that fails', function () {
 
     expect($runs->getArrayCopy())->toBe([1, 1]);
 });
+
+it('leaves the plain .vtt of each packaged track next to its segments', function () {
+    // The packager creates a track's segment directory; the fake stands in for the tracks it
+    // got through. `b` is the one it refuses, and gets no directory and no sidecar.
+    foreach (['a', 'b', 'c'] as $ulid) {
+        file_put_contents("{$this->dir}/{$ulid}.vtt", "WEBVTT\n\n00:01.000 --> 00:02.000\n{$ulid}\n");
+    }
+
+    Process::fake(function ($process) {
+        $inputs = array_values(array_filter($process->command, fn ($arg) => str_starts_with((string) $arg, 'in=')));
+
+        if (count($inputs) !== 1 || str_contains($inputs[0], '/b.vtt')) {
+            return Process::result(output: '', errorOutput: 'PARSER_FAILURE', exitCode: 1);
+        }
+
+        preg_match('#in=.*/(\w+)\.vtt#', $inputs[0], $track);
+        @mkdir("{$this->dir}/{$track[1]}");
+
+        return Process::result('ok');
+    });
+
+    app(SubtitlePackager::class)->packageAndGraft($this->subs, $this->dir, 100, 60);
+
+    expect(file_get_contents("{$this->dir}/a/sub.vtt"))->toBe(file_get_contents("{$this->dir}/a.vtt"))
+        ->and(is_file("{$this->dir}/c/sub.vtt"))->toBeTrue()
+        ->and(is_dir("{$this->dir}/b"))->toBeFalse();
+
+    foreach (['a', 'c'] as $ulid) {
+        unlink("{$this->dir}/{$ulid}/sub.vtt");
+        rmdir("{$this->dir}/{$ulid}");
+    }
+});

@@ -65,6 +65,56 @@ http {
         keepalive_timeout 15s;
     }
 
+    # ---- Master manifests are built by the API ----
+    #
+    # A master manifest (`{output}.mpd`, `{output}.m3u8`) is no longer the bucket's file as it
+    # is: the API builds it for the link it was requested with — a resolution cap, subtitles as
+    # plain WebVTT, whatever options the link's token names. Only the master: media playlists and
+    # segments are the same bytes for every viewer and keep coming from the bucket.
+    #
+    # The API, held open like the bucket is. Unused, and pointed at a port nothing listens on,
+    # when the entrypoint found no INTERNAL_API_URL.
+    upstream manifest_api {
+        zone manifest_api 64k;
+        server ${MANIFEST_API_SERVER} ${MANIFEST_API_RESOLVE};
+        keepalive 16;
+        keepalive_timeout 15s;
+    }
+
+    # Where a master manifest is asked for: the hop to the API first, and the bucket when that
+    # fails. The fallback is the whole design of this block. `backup` is tried when the API hop
+    # answers with an error or not at all (`proxy_next_upstream` in `location /`), and it is the
+    # same loopback server every other request goes to — so a viewer gets the manifest as
+    # packaged, through exactly the path that served it before, instead of no playback. That is
+    # right while what the API adds is a preference; a restriction would have to fail closed, and
+    # this block is what to change then.
+    #
+    # One failure also takes the API hop out for the default ten seconds, so an API that is down
+    # costs one viewer its timeout every ten seconds and the rest nothing. The `zone` is what makes
+    # that true: without shared memory each worker process keeps its own count, and an unreachable
+    # API cost every viewer the full connect timeout.
+    upstream manifest_origin {
+        zone manifest_origin 64k;
+        server 127.0.0.1:8081;
+        server 127.0.0.1:8080 backup;
+        keepalive 16;
+    }
+
+    # `manifest_origin` for a master manifest when the API is configured, `edge_origin` otherwise
+    # — which is every request on an edge deployed without INTERNAL_API_URL, unchanged.
+    map $uri $edge_upstream {
+        "~^/[0-9A-Za-z]{26}/play/[^/]+\.(mpd|m3u8)$"  ${MANIFEST_UPSTREAM};
+        default                                        edge_origin;
+    }
+
+    # A manifest built for one link must not be kept for the next: this cache is keyed on the
+    # path, and two viewers of the same path may have asked for different things. The API caches
+    # what it builds on its side. Empty, so the cache works as before, when the API is not in use.
+    map $edge_upstream $manifest_uncached {
+        manifest_origin  1;
+        default          "";
+    }
+
     map $uri $video_ulid {
         "~^/(?<v>[0-9A-Za-z]{26})/"  $v;
         default                      -;
@@ -401,6 +451,10 @@ http {
             # whose 30 days ran out into a 304.
             proxy_cache vod_cache;
             proxy_cache_key "$uri";
+            # A master manifest built by the API is per link ($manifest_uncached): neither read
+            # from this cache nor written to it.
+            proxy_cache_bypass $manifest_uncached;
+            proxy_no_cache $manifest_uncached;
             # A miss is written to the pool as it arrives; 4 KB buffers made that thousands of
             # small writes for one segment.
             proxy_buffer_size 64k;
@@ -434,7 +488,17 @@ http {
             add_header Access-Control-Allow-Origin "*" always;
             add_header Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges" always;
 
-            proxy_pass http://edge_origin;
+            # The link's token, for the API to look up what the link asked of its manifests. It
+            # was stripped from the query above, so this header is the only way it travels on.
+            # Sent on every request because `proxy_set_header` cannot be conditional; the bucket
+            # hop drops it.
+            proxy_set_header X-Link-Token $link_token;
+            # Only `manifest_origin` has a second server to go to (see the upstream). 403 and 404
+            # are in the list for an API that does not know the route yet or was given another
+            # secret: a deploy that upgrades the edges first must not stop playback.
+            proxy_next_upstream error timeout http_500 http_502 http_503 http_504 http_403 http_404;
+
+            proxy_pass http://$edge_upstream;
             proxy_http_version 1.1;
             proxy_set_header Connection "";
         }
@@ -494,9 +558,69 @@ http {
             # a bucket that varies its response on it would defeat the single cached copy.
             proxy_set_header Origin "";
             proxy_set_header X-Edge-Asset-Client "";
+            # The viewer's token is for the manifest API, and none of the bucket's business.
+            proxy_set_header X-Link-Token "";
             proxy_set_header X-Amz-Date $aws_auth_date;
             proxy_set_header X-Amz-Content-SHA256 UNSIGNED-PAYLOAD;
             proxy_set_header Authorization $aws_token;
+        }
+    }
+
+    # The hop to the manifest API (see `manifest_origin`). A server of its own rather than a
+    # location of the signing server, so the bucket stays reachable under the very same path and
+    # can stand in for this one.
+    server {
+        listen 127.0.0.1:8081;
+
+        access_log off;
+        keepalive_requests 100000;
+        # As on the signing server: the outer rewrites the body, and cannot rewrite a compressed one.
+        gzip off;
+
+        location ~ "^/([0-9A-Za-z]{26})/play/([^/]+\.(?:mpd|m3u8))$" {
+            # Short, because a viewer is waiting on a file of a few kilobytes and there is a
+            # fallback: past these the bucket answers instead.
+            proxy_connect_timeout 2s;
+            proxy_send_timeout 5s;
+            proxy_read_timeout 5s;
+
+            # No query: the token was stripped by the validator and travels as a header, and with
+            # variables in it nginx sends this URI exactly as written.
+            proxy_pass ${MANIFEST_API_SCHEME}://manifest_api${MANIFEST_API_PATH}/manifests/$1/$2;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_ssl_server_name on;
+            proxy_ssl_name ${MANIFEST_API_NAME};
+            # Always verified: the secret below goes out on this connection. Vector already
+            # holds the same URL to the same standard.
+            proxy_ssl_verify on;
+            proxy_ssl_verify_depth 4;
+            proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+            proxy_set_header Host ${MANIFEST_API_HOST};
+            proxy_set_header Authorization "Bearer ${INTERNAL_API_SECRET}";
+            proxy_set_header X-Link-Token $http_x_link_token;
+            # Uncompressed, for `secure_token` on the outer server.
+            proxy_set_header Accept-Encoding "";
+            proxy_set_header Origin "";
+            proxy_set_header Referer "";
+            proxy_set_header Cookie "";
+            proxy_set_header X-Edge-Asset-Client "";
+
+            # The API answers like the web application it is: frame, sniffing and referrer
+            # policies, HSTS for its own host, a Vary for its own CORS. None of it describes a
+            # manifest served from this host, and HSTS in particular would pin the CDN's whole
+            # domain to https on the API's say-so. Caching and CORS are the outer server's.
+            proxy_hide_header Vary;
+            proxy_hide_header Cache-Control;
+            proxy_hide_header Set-Cookie;
+            proxy_hide_header Strict-Transport-Security;
+            proxy_hide_header X-Frame-Options;
+            proxy_hide_header X-Content-Type-Options;
+            proxy_hide_header Referrer-Policy;
+        }
+
+        location / {
+            return 404;
         }
     }
 }

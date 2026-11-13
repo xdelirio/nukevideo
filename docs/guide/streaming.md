@@ -24,7 +24,7 @@ Client → Delivery (proxy node) → S3 (CMAF) → Client
 1. The client requests a manifest with a signed token.
 2. The delivery layer validates the token.
 3. The manifest is served, then the client fetches the CMAF segments it references.
-4. Segments are cached at the edge; manifests for 30 seconds, so an update is picked up within half a minute.
+4. Segments are cached at the edge. The master manifest is built by the API for the link it was requested with (see [Per-link manifests](#per-link-manifests)); an update to a video's tracks is picked up within half a minute.
 
 The delivery layer is a set of self-hosted **proxy nodes**. See [CDN & Delivery](/guide/cdn) for how they work and how to set them up.
 
@@ -92,9 +92,35 @@ nothing to sign it into, and the mint answers `422` rather than a link without t
 node still running an older edge validates the token and serves it unlimited: redeploy the node
 to enforce it.
 
+## Per-link manifests
+
+A master manifest (`{output}.mpd`, `{output}.m3u8`) is not served as the file the packager wrote.
+The edge validates the link's token and then asks the API for the manifest, and the API builds it
+from what that link asked for when it was minted:
+
+| Option | Effect |
+|--------|--------|
+| `resolution` | Video renditions above the cap are left out. |
+| `subtitlesFormat` | DASH text tracks point at plain `.vtt` files by default; `segments` keeps the packaged fragmented-MP4 WebVTT. |
+
+The options are never in the URL. The link's token carries an opaque key for them, signed like
+the rest of the token, and the edge hands the token back when it asks — so a viewer cannot change
+them, and two viewers of the same video can be given different manifests from the same path. A link
+minted without options gets the defaults: the full ladder, and subtitles as plain `.vtt`.
+
+Only the master manifest takes this path. HLS media playlists and every segment are the same
+bytes for every viewer, and keep going from the edge's cache or straight from the bucket.
+
+**If the API cannot be reached**, the edge serves the packaged manifest from the bucket instead:
+the viewer plays, without the personalization — the full ladder, and DASH subtitles in their
+packaged form. That is the right trade while the options are
+preferences — what a device can play, how a player wants its subtitles. It also means an option
+here **hides** a rendition, it does not lock it: the link's token still authorizes the whole
+playback directory.
+
 ## Caching
 
-The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Manifests** are cached for 30 seconds: the cache keeps the bucket's copy and the edge writes each viewer's token into it on the way out, so a playback start skips the trip to S3 and still gets a token of its own. Manifests and subtitle cues are served gzip-compressed. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks).
+The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Master manifests** are built by the API, which keeps each built variant for 30 seconds, shared by every viewer who asked for the same thing — so a playback start costs one request to the API and no trip to S3 — and the edge writes each viewer's token into the result on the way out. HLS media playlists are cached at the edge for 30 seconds, as before. Manifests and subtitle cues are served gzip-compressed. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks).
 
 ## Bandwidth Monitoring
 

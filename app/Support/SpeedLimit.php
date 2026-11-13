@@ -51,7 +51,7 @@ class SpeedLimit
      */
     public static function ensureSupported(EdgeLinkSigner $cdn, ?int $kbps): void
     {
-        if ($kbps !== null && ! $cdn->supportsSpeedLimit()) {
+        if ($kbps !== null && ! $cdn->signs()) {
             throw ValidationException::withMessages([
                 'speedLimitKbps' => 'The active CDN cannot enforce a speed limit on its links.',
             ]);

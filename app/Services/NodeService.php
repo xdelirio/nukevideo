@@ -234,6 +234,11 @@ class NodeService
         'VOD_ALLOWED_DOMAINS',
         'VOD_ALLOW_NULL_ORIGIN',
         'VOD_S3_TLS_VERIFY',
+        // Where the edge asks for master manifests, and the secret it asks with — the same one
+        // the node's Vector ships the access log with. The only credential in this container
+        // besides the bucket's read keys and the token secret.
+        'INTERNAL_API_URL',
+        'INTERNAL_API_SECRET',
         'VOD_CACHE_MAX_SIZE',
         'VOD_CACHE_MIN_FREE',
         'VOD_CACHE_KEYS_ZONE',
