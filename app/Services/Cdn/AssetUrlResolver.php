@@ -21,7 +21,7 @@ use App\Models\Video;
  */
 class AssetUrlResolver
 {
-    public function __construct(private CdnProvider $cdn) {}
+    public function __construct(private EdgeLinkSigner $cdn) {}
 
     public function for(string $videoUlid, string $filename): string
     {
@@ -29,7 +29,6 @@ class AssetUrlResolver
             return $this->cdn->assetUrl(
                 $videoUlid,
                 Video::assetKeyFor($videoUlid, $filename),
-                app()->isLocal(),
             );
         } catch (NoCdnNodeAvailableException) {
             return url('/api/videos/'.Video::assetPath($videoUlid, $filename));

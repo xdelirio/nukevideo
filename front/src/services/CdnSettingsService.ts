@@ -1,10 +1,6 @@
 import apiClient from './api'
 
-// Only the active provider's block is sent; the backend leaves the other untouched.
-export type CdnSettingsUpdate = {
-  provider: App.Enums.CdnDriver
-  selfHosted?: App.Data.SelfHostedConfigData
-  bunny?: App.Data.BunnyConfigData
+export type CdnSettingsUpdate = Omit<App.Data.CdnSettingsData, 'edgeS3'> & {
   // Write-only secret: empty keeps the stored one. An empty key clears the pair.
   edgeS3?: { accessKeyId: string; secretAccessKey?: string }
 }

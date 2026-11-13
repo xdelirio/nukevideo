@@ -10,7 +10,7 @@ use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Output;
 use App\Models\Stream;
 use App\Models\Video;
-use App\Services\Cdn\SelfHostedProvider;
+use App\Services\Cdn\EdgeLinkSigner;
 use App\Services\ChunkTranscodeService;
 use App\Services\CreateVideoStreamsService;
 use App\Services\PackagerCommandBuilder;
@@ -601,7 +601,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
      * they sync to their own prefix instead of the video's.
      *
      * That move is the point. A playback token authorizes the manifest's whole directory
-     * ({@see SelfHostedProvider::aclFor}), so a retained track sitting in the same directory as the
+     * ({@see EdgeLinkSigner::aclFor}), so a retained track sitting in the same directory as the
      * manifest was the full-quality progressive file, one GET away for anyone holding a legitimate
      * playback link — no segments, no ABR, no second signature. And not even a guess: `Str::ulid()`
      * is monotonic, so the file's ULID is derivable from the stream ULID the manifest names. The

@@ -3,8 +3,7 @@
 /**
  * The per-link lifetime. The token window is the default, not the ceiling: a stream wants an hour
  * and an offline download a day, from the same API. What these pin is that the lifetime asked for
- * is the one SIGNED — the `exp` the edge checks, Bunny's `expires` — that `expiresAt` reports
- * that same moment, and that the tracking mapping lives as long as the link it describes.
+ * is the one SIGNED — the `exp` the edge checks — that `expiresAt` reports that same moment, and that the tracking mapping lives as long as the link it describes.
  */
 
 use App\Models\Node;
@@ -71,15 +70,9 @@ function signedExpiryOf(string $url): int
     return (int) $m['exp'];
 }
 
-function fakeExpiryCdn(string $provider = 'self_hosted'): void
+function fakeExpiryCdn(): void
 {
-    CdnSettings::fake([
-        'provider' => $provider,
-        'providers' => [
-            'self_hosted' => ['token_secret' => bin2hex('secret'), 'token_window' => 3600],
-            'bunny' => ['host' => 'cdn.example.com', 'token_key' => 'secret', 'token_window' => 3600],
-        ],
-    ]);
+    CdnSettings::fake(['token_secret' => bin2hex('secret'), 'token_window' => 3600]);
 }
 
 beforeEach(function () {
@@ -152,24 +145,6 @@ it('keeps the tracking id of a long link for as long as the link is valid', func
     $this->travel(23)->hours();
 
     expect(app(TrackingRegistry::class)->resolve($hash))->toBe('customer-7');
-});
-
-it('signs the lifetime into Bunny\'s expiry, for playback and for a download', function () {
-    fakeExpiryCdn('bunny');
-    $video = expiringVideo();
-    $track = expiringTrack($video);
-
-    $play = $this->postJson("/api/videos/{$video->ulid}/play", ['expiresIn' => 86_400])->assertOk()->json('data.sources.0.url');
-    $download = $this->postJson("/api/streams/{$track->ulid}/download", ['expiresIn' => 600])->assertOk()->json('data.url');
-
-    preg_match('#&expires=(?<e>\d+)/#', $play, $p);
-    preg_match('#&expires=(?<e>\d+)$#', $download, $d);
-
-    // A playback token may be jittered by up to EXPIRY_JITTER to keep its hash unique; a
-    // download's expiry is exact.
-    expect((int) $p['e'])->toBeGreaterThanOrEqual(now()->timestamp + 86_400)
-        ->and((int) $p['e'])->toBeLessThanOrEqual(now()->timestamp + 86_400 + 300)
-        ->and((int) $d['e'])->toBe(now()->timestamp + 600);
 });
 
 it('validates the lifetime on every mint', function (mixed $value) {

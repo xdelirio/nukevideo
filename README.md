@@ -31,7 +31,7 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
 2. An **S3 webhook** notifies the API that a new original is ready.
 3. **Worker nodes** split the source into chunks and transcode them in parallel with **FFmpeg** (AV1 / H.264), picking the CRF per rendition from a **VMAF probe** to hit a target quality.
 4. **shaka-packager** packages each rendition **once** into static **CMAF** — the same segments serve both HLS and DASH. Subtitles are packaged as CMAF too.
-5. Content is delivered as adaptive **HLS/DASH** with time-limited **token authentication**, either from **self-hosted proxy nodes** or through **Bunny CDN**.
+5. Content is delivered as adaptive **HLS/DASH** with time-limited **token authentication** from **self-hosted proxy nodes**.
 
 ## Features
 
@@ -39,8 +39,8 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
 - **🎯 Per-title VMAF CRF** — probes sample windows of each source, measures VMAF, and interpolates the CRF needed to hit a target quality per rendition instead of a fixed CRF for everything.
 - **📦 Package once, stream everywhere** — shaka-packager writes static CMAF; one set of segments feeds both HLS and DASH (plus CMAF subtitles), so no on-the-fly repackaging.
 - **⚡ Distributed, chunked processing** — scale by adding worker nodes; sources are chunked and encoded in parallel, and jobs auto-distribute to the least busy node.
-- **🚚 Two delivery modes** — run your own **proxy nodes** (custom nginx, token validation, S3-backed, edge caching) or point a **Bunny CDN** pull-zone at your storage. No lock-in.
-- **🔐 Token-based access control** — Akamai-style stream tokens for self-hosted delivery; Bunny HMAC token authentication for the CDN path.
+- **🚚 Self-hosted delivery** — run your own **proxy nodes** (custom nginx, token validation, S3-backed, edge caching). No third-party edge.
+- **🔐 Token-based access control** — Akamai-style stream tokens, validated at the edge.
 - **🗄 S3-compatible storage** — AWS S3, MinIO, RustFS, iDrive e2, or any S3 API (transfers via `s5cmd`).
 - **📊 Bandwidth & usage analytics** — Vector.dev ships edge access logs to the API; usage is tracked per video and per IP.
 - **🔌 RESTful API + admin panel** — Sanctum auth (SPA sessions + API tokens), webhooks, node management over SSH, and a Vue 3 admin SPA.
@@ -55,7 +55,7 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
 | Database | MariaDB 11 (MySQL-compatible) |
 | Encoding | FFmpeg (SVT-AV1, x264/x265) + VMAF |
 | Packaging | shaka-packager (static CMAF) |
-| Delivery | Self-hosted proxy nodes (nginx) **or** Bunny CDN |
+| Delivery | Self-hosted proxy nodes (nginx) |
 | Storage | S3-compatible (AWS, MinIO, RustFS, iDrive e2) via `s5cmd` |
 | Analytics | MariaDB + Vector.dev |
 | Routing | Traefik |
@@ -79,9 +79,8 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
         │  shaka    │
         └───────────┘
 
-   Delivery (pick one):
-     • Proxy nodes  →  nginx + token validation  →  S3   →  Client
-     • Bunny CDN    →  pull-zone + HMAC token     →  S3   →  Client
+   Delivery:
+     Proxy nodes  →  nginx + token validation  →  S3   →  Client
 ```
 
 ## Quick start (development)
@@ -130,18 +129,13 @@ Then, from the admin panel:
 
 1. **Add storage** — point NukeVideo at your S3 bucket and configure the upload webhook.
 2. **Add worker nodes** — register a server with an SSH key and deploy the worker image; workers pull encoding jobs from the queue.
-3. **Choose delivery** — either add **proxy nodes** (deployed over SSH like workers) or enable **Bunny CDN** in CDN Settings (see below). You don't need both.
+3. **Add proxy nodes** — deployed over SSH like workers, they deliver the packaged video (see below).
 
 See the [Deployment guide](docs/guide/configuration.md) for the full environment reference.
 
-## Delivery: proxy nodes or Bunny CDN
+## Delivery: proxy nodes
 
-NukeVideo packages everything to static CMAF on S3, so delivery is just "serve those files with token auth + caching." Two supported paths:
-
-- **Self-hosted proxy nodes** — a custom nginx build that validates stream tokens, fetches packaged segments from S3 with AWS auth, caches them at the edge (manifests bypass cache), and supports Cloudflare real-IP. Managed and deployed from the admin panel over SSH.
-- **Bunny CDN** — a Bunny pull-zone with **token authentication** (HMAC-SHA256, directory mode: the token is scoped to the video's path so the manifest and all its segments authenticate under one token). Bunny pulls from your S3 origin and handles global edge caching — no proxy servers to run. Configure it in **CDN Settings** by choosing the `bunny` driver and setting the pull-zone host, token key, and token window.
-
-Pick proxy nodes when you want full control and no third-party edge; pick Bunny when you want global CDN reach without operating servers.
+NukeVideo packages everything to static CMAF on S3, so delivery is just "serve those files with token auth + caching." That is the job of **self-hosted proxy nodes**: a custom nginx build that validates stream tokens, fetches packaged segments from S3 with AWS auth, caches them at the edge (manifests for 30 seconds), and supports Cloudflare real-IP. Managed and deployed from the admin panel over SSH.
 
 ## Documentation
 

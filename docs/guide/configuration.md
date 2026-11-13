@@ -56,7 +56,7 @@ Nodes have no `.env` of their own. A deploy copies the database, Redis, S3, Sent
 
 ## Proxy Node Delivery
 
-These values control token validation on self-hosted proxy nodes, which serve the pre-packaged CMAF from S3. They are **not** set in `.env` — they live in the **CDN Settings** panel (the `self_hosted` provider) and are injected into the proxy's nginx container at deploy time under the names below. Leaving one empty falls back to the container's default.
+These values control token validation on self-hosted proxy nodes, which serve the pre-packaged CMAF from S3. They are **not** set in `.env` — they live in the **CDN Settings** panel and are injected into the proxy's nginx container at deploy time under the names below. Leaving one empty falls back to the container's default.
 
 The segment cache normally needs no configuration: the node's deploy builds it from the host's spare disks and the edge sizes it to that pool on boot. See [Cache disks](/guide/nodes#cache-disks), and [Proxy cache](#proxy-cache) for the knobs that exist anyway.
 
@@ -69,12 +69,7 @@ The segment cache normally needs no configuration: the node's deploy builds it f
 
 ## CDN
 
-Delivery is chosen per deployment in the admin panel under **CDN Settings**, using the `provider` field:
-
-- `self_hosted` — Deliver through your own proxy nodes (uses the [Proxy Node Delivery](#proxy-node-delivery) settings above).
-- `bunny` — Deliver through a Bunny CDN pull-zone pointed at your S3 origin. Configure the pull-zone **host**, **token key**, and **token window** in the panel.
-
-Bunny is configured entirely from the panel (stored in the database), not through `.env`. See [CDN & Delivery](/guide/cdn) for details on both modes.
+Delivery runs through your own proxy nodes, with the [Proxy Node Delivery](#proxy-node-delivery) settings above. The signing secret, the token window and the access rules are set in the admin panel under **CDN Settings** (stored in the database), not through `.env`. See [CDN & Delivery](/guide/cdn) for details.
 
 ## Video Processing
 
@@ -181,6 +176,6 @@ The edge sizes its segment cache to the filesystem it is given on every boot. Th
 
 Worker containers receive the database, Redis, S3 and Sentry settings from the API host, plus the [Video Processing](#video-processing) variables set in the node environment. `DOCKER_MEMORY` and `DOCKER_CPUSET_CPUS` apply to workers only.
 
-### Vector (Proxy Nodes, self-hosted CDN only)
+### Vector (Proxy Nodes)
 
-Vector runs on proxy nodes when the CDN provider is `self_hosted` — nothing else produces the access-log lines it ships, and a deploy removes it anywhere else. It reads the edge nginx's log from the Docker socket, sums bytes per video, viewer and link token on the node (the token is hashed there; it never leaves), and posts the aggregates to the API's internal bandwidth endpoint, which sums them into `usage_daily`. Its config is rendered from `vector/vector.yaml` at deploy time; to watch what it emits on a node, `docker exec <vector container> vector tap aggregate_bandwidth_logs`.
+Vector runs on proxy nodes only — nothing else produces the access-log lines it ships, and a deploy removes it anywhere else. It reads the edge nginx's log from the Docker socket, sums bytes per video, viewer and link token on the node (the token is hashed there; it never leaves), and posts the aggregates to the API's internal bandwidth endpoint, which sums them into `usage_daily`. Its config is rendered from `vector/vector.yaml` at deploy time; to watch what it emits on a node, `docker exec <vector container> vector tap aggregate_bandwidth_logs`.

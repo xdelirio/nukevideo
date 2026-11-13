@@ -14,7 +14,7 @@ namespace App\Services\Cdn;
  * out of the cache. Neither the token nor the hash leaves the mint — the API answers with the
  * URL alone; attribution is a server-side side effect of minting it.
  *
- * `token` is null for an unsigned link (a provider with no signing key configured): with no
+ * `token` is null for an unsigned link (no signing secret configured): with no
  * token in the URL there is nothing for the log to carry, so such a link cannot be attributed.
  */
 class SignedLink

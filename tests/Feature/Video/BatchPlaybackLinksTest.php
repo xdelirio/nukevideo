@@ -119,10 +119,7 @@ function playSubtitle(Video $video, string $language = 'en', array $attributes =
 beforeEach(function () {
     Storage::fake('s3');
 
-    CdnSettings::fake([
-        'provider' => 'self_hosted',
-        'providers' => ['self_hosted' => ['token_secret' => bin2hex('secret'), 'token_window' => 3600], 'bunny' => []],
-    ]);
+    CdnSettings::fake(['token_secret' => bin2hex('secret'), 'token_window' => 3600]);
 
     Node::create([
         'name' => 'edge',

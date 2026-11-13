@@ -20,15 +20,9 @@ function deployableNode(array $attributes = []): Node
     ]);
 }
 
-function fakeCdnProvider(string $provider): void
+function fakeCdnSettings(): void
 {
-    CdnSettings::fake([
-        'provider' => $provider,
-        'providers' => [
-            'self_hosted' => ['token_secret' => 'secret'],
-            'bunny' => ['host' => 'cdn.example.com', 'token_key' => 'key'],
-        ],
-    ]);
+    CdnSettings::fake(['token_secret' => 'secret']);
 }
 
 function asLocalEnvironment(): void
@@ -45,7 +39,7 @@ function asLocalEnvironment(): void
 beforeEach(fn () => config(['nuke.registry' => null]));
 
 describe('development and production deploys on one host', function () {
-    beforeEach(fn () => fakeCdnProvider('self_hosted'));
+    beforeEach(fn () => fakeCdnSettings());
 
     it('keeps every docker name a development deploy writes out of production space', function () {
         // The same machine is a production worker and the development host. Node ids come from
@@ -189,8 +183,8 @@ describe('chunk store bootstrap', function () {
 });
 
 describe('vector placement', function () {
-    it('ships edge logs from a self-hosted proxy', function () {
-        fakeCdnProvider('self_hosted');
+    it('ships edge logs from a proxy', function () {
+        fakeCdnSettings();
         $script = app(NodeService::class)->buildDeployScript(
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
         );
@@ -202,27 +196,15 @@ describe('vector placement', function () {
     it('does not run vector on a worker node, and clears one an older deploy left', function () {
         // Only the vod nginx writes the `ip=/bytes=/video=` lines the transform keeps; a worker's
         // logs are all dropped, so vector there reads every line of Horizon to produce nothing.
-        fakeCdnProvider('self_hosted');
+        fakeCdnSettings();
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
         expect($script)->toContain("VECTOR_RUN_ARGS=''")
             ->and($script)->toContain("VECTOR_CONTAINER='nukevideo_vector'");
     });
 
-    it('does not run vector behind bunny, whose logs come from its own API', function () {
-        // Viewer traffic never touches our edge on Bunny; `bunny:ingest-logs` polls the Logging
-        // API into the same bandwidth pipeline instead.
-        fakeCdnProvider('bunny');
-        $script = app(NodeService::class)->buildDeployScript(
-            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
-        );
-
-        expect($script)->toContain("VECTOR_RUN_ARGS=''")
-            ->and($script)->toContain("VECTOR_CONTAINER='nukevideo_vector'");
-    });
-
     it('hands vector only the two variables its config reads', function () {
-        fakeCdnProvider('self_hosted');
+        fakeCdnSettings();
         $script = app(NodeService::class)->buildDeployScript(
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
         );
@@ -243,7 +225,7 @@ describe('what the edge container is given', function () {
     // leak. `env()` reads these live, and `$_SERVER` ahead of `$_ENV`: the container running the
     // suite has some of them set already, which is why both are replaced and put back.
     beforeEach(function () {
-        fakeCdnProvider('self_hosted');
+        fakeCdnSettings();
         $this->hostEnv = [
             'DB_PASSWORD' => 'db-secret',
             'REDIS_PASSWORD' => 'redis-secret',
@@ -315,10 +297,7 @@ describe('what the edge container is given', function () {
         // the list would reach nginx empty, on the next deploy, with nothing else to say why.
         // A list configured and a null origin allowed, because those two variables are deploy-owned
         // and absent otherwise.
-        CdnSettings::fake([
-            'provider' => 'self_hosted',
-            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com'], 'allow_null_origin' => true]],
-        ]);
+        CdnSettings::fake(['token_secret' => 'secret', 'allowed_domains' => ['example.com'], 'allow_null_origin' => true]);
 
         $sources = file_get_contents(base_path('vod/entrypoint.sh')).file_get_contents(base_path('vod/nginx/nginx.conf.template'));
         preg_match_all('/\$\{?((?:AWS|VOD)_[A-Z0-9_]+)/', $sources, $named);
@@ -391,14 +370,11 @@ describe('what the edge container is given', function () {
 
 describe('edge token settings', function () {
     it('hands the proxy the query argument the signer actually writes', function () {
-        // The name is one setting read by two sides: `SelfHostedProvider` signs `?<name>=...` and
+        // The name is one setting read by two sides: `EdgeLinkSigner` signs `?<name>=...` and
         // the edge's nginx.conf validates `$arg_<name>`. While it was hardcoded in the template,
         // changing it in the panel left the edge reading an argument nobody sent — a 403 on every
         // manifest and segment, with only the unsigned assets still served.
-        CdnSettings::fake([
-            'provider' => 'self_hosted',
-            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'token_name' => 'nv_token']],
-        ]);
+        CdnSettings::fake(['token_secret' => 'secret', 'token_name' => 'nv_token']);
 
         $env = app(NodeService::class)->getEnvironmentVariables(
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
@@ -408,7 +384,7 @@ describe('edge token settings', function () {
     });
 
     it('falls back to the akamai name both sides default to', function () {
-        fakeCdnProvider('self_hosted');
+        fakeCdnSettings();
 
         $env = app(NodeService::class)->getEnvironmentVariables(
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
@@ -418,7 +394,7 @@ describe('edge token settings', function () {
     });
 
     it('hands the edge no domain list while none is configured', function () {
-        fakeCdnProvider('self_hosted');
+        fakeCdnSettings();
         config()->set('sanctum.stateful', ['panel.example.com']);
 
         $env = app(NodeService::class)->getEnvironmentVariables(
@@ -429,10 +405,7 @@ describe('edge token settings', function () {
     });
 
     it('hands the edge the allowed domains plus the panel, which must keep playing', function () {
-        CdnSettings::fake([
-            'provider' => 'self_hosted',
-            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com', '*.site.example']]],
-        ]);
+        CdnSettings::fake(['token_secret' => 'secret', 'allowed_domains' => ['example.com', '*.site.example']]);
         // What the default of SANCTUM_STATEFUL_DOMAINS looks like, plus a panel on its own port.
         // The loopback names are nobody's panel in production, and any page on a viewer's machine
         // could claim them.
@@ -446,10 +419,7 @@ describe('edge token settings', function () {
     });
 
     it('does not let a node override loosen the allowed domains', function () {
-        CdnSettings::fake([
-            'provider' => 'self_hosted',
-            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com']]],
-        ]);
+        CdnSettings::fake(['token_secret' => 'secret', 'allowed_domains' => ['example.com']]);
         config()->set('sanctum.stateful', []);
 
         $env = app(NodeService::class)->getEnvironmentVariables(
@@ -461,10 +431,7 @@ describe('edge token settings', function () {
     });
 
     it('tells the edge to let a null origin through once the operator allowed it', function () {
-        CdnSettings::fake([
-            'provider' => 'self_hosted',
-            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com'], 'allow_null_origin' => true]],
-        ]);
+        CdnSettings::fake(['token_secret' => 'secret', 'allowed_domains' => ['example.com'], 'allow_null_origin' => true]);
 
         $env = app(NodeService::class)->getEnvironmentVariables(
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
@@ -476,10 +443,7 @@ describe('edge token settings', function () {
     it('does not let a node override open the edge to a null origin', function () {
         // Off in CDN Settings. Any website can send `Origin: null`, so one line in a node's env
         // would undo most of the operator's list on that edge.
-        CdnSettings::fake([
-            'provider' => 'self_hosted',
-            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'allowed_domains' => ['example.com']]],
-        ]);
+        CdnSettings::fake(['token_secret' => 'secret', 'allowed_domains' => ['example.com']]);
 
         $env = app(NodeService::class)->getEnvironmentVariables(
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'env' => 'VOD_ALLOW_NULL_ORIGIN=1'])
@@ -490,7 +454,7 @@ describe('edge token settings', function () {
 });
 
 describe('name resolution inside the containers', function () {
-    beforeEach(fn () => fakeCdnProvider('self_hosted'));
+    beforeEach(fn () => fakeCdnSettings());
 
     it('keeps a lost DNS packet to a one-second retry in every container a deploy raises', function (array $attributes) {
         // A home router's NAT dropped one of the A/AAAA pair glibc sends from a single socket, and
@@ -511,7 +475,7 @@ describe('name resolution inside the containers', function () {
 });
 
 describe('fleet-wide timing', function () {
-    beforeEach(fn () => fakeCdnProvider('self_hosted'));
+    beforeEach(fn () => fakeCdnSettings());
 
     it('keeps the worker timeout and the redelivery window the same on every node', function () {
         // Chunks are planned against the timeout of the node that prepares the video and encoded

@@ -13,10 +13,8 @@ use App\Models\Output;
 use App\Models\Stream;
 use App\Models\Video;
 use App\Services\Cdn\AssetUrlResolver;
-use App\Services\Cdn\BunnyProvider;
-use App\Services\Cdn\CdnProvider;
+use App\Services\Cdn\EdgeLinkSigner;
 use App\Services\Cdn\ProxyRing;
-use App\Services\Cdn\SelfHostedProvider;
 use App\Services\Cdn\SignedLink;
 use App\Services\Cdn\TrackingRegistry;
 use App\Support\LinkExpiry;
@@ -32,19 +30,16 @@ use App\Support\SpeedLimit;
  *
  * Playback makes the case sharper than downloads did. A download token is scoped to its one
  * object, so N tracks genuinely need N signatures; a playback token is scoped to the manifest's
- * DIRECTORY — `token_path` on Bunny ({@see BunnyProvider::signed}), an ACL with
- * a trailing `*` on the edge ({@see SelfHostedProvider::aclFor}) — and every
- * output of a video packages into the same `{videoUlid}/play/` prefix
+ * DIRECTORY — an ACL with a trailing `*` on the edge ({@see EdgeLinkSigner::aclFor}) — and
+ * every output of a video packages into the same `{videoUlid}/play/` prefix
  * ({@see Output::packagePrefix}). So the signatures this loop produces all authorize exactly the
- * same bytes. Collapsing them to one is a change inside the providers (both are bound `scoped`,
- * so a per-request memo keyed on the directory would do it) and needs nothing from here or from
- * the {@see CdnProvider} contract — which is why this mints the obvious way and stays correct
- * either way.
+ * same bytes. Collapsing them to one is a change inside {@see EdgeLinkSigner} and needs
+ * nothing from here — which is why this mints the obvious way and stays correct either way.
  */
 class VodLinkService
 {
     public function __construct(
-        private CdnProvider $cdn,
+        private EdgeLinkSigner $cdn,
         private TrackingRegistry $tracking,
         private AssetUrlResolver $assets,
     ) {}
@@ -201,7 +196,7 @@ class VodLinkService
      * `keep_processed_files` says ({@see PackageVideoJob::OPTIONAL_TYPES}).
      *
      * So each one is a download signature: scoped to its own object, and not bound to the viewer's
-     * address ({@see CdnProvider::downloadUrl}). Neither costs anything here — a subtitle is the
+     * address ({@see EdgeLinkSigner::downloadUrl}). Neither costs anything here — a subtitle is the
      * one track whose content is no more valuable than the playback it accompanies — and the edge
      * answers that zone with the same open CORS a cross-origin `<track>` needs.
      *
@@ -223,7 +218,7 @@ class VodLinkService
             }
 
             try {
-                $link = $this->cdn->downloadUrl($video->ulid, $stream->storedPath($video), app()->isLocal(), expiresIn: $lifetime);
+                $link = $this->cdn->downloadUrl($video->ulid, $stream->storedPath($video), expiresIn: $lifetime);
             } catch (NoCdnNodeAvailableException) {
                 abort(503, 'No node available');
             }
@@ -283,7 +278,7 @@ class VodLinkService
     private function sign(Video $video, string $path, string $ip, ?int $speedLimitKbps, int $lifetime): SignedLink
     {
         try {
-            return $this->cdn->manifestUrl($video, $path, $ip, app()->isLocal(), $speedLimitKbps, $lifetime);
+            return $this->cdn->manifestUrl($video, $path, $ip, $speedLimitKbps, $lifetime);
         } catch (NoCdnNodeAvailableException) {
             // The same answer the per-output mint gives: the video exists and the caller is
             // entitled to it, there is just nothing to serve it right now.

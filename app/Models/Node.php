@@ -109,9 +109,7 @@ class Node extends Model
      *
      * Listed unconditionally, whether or not the current settings would still create each one: a
      * `docker stop` on a name that is not there is a no-op, so this never has to reconstruct which
-     * CDN provider or which environment the deploy ran under. That matters most for the ones a
-     * settings change can orphan — Vector stops being deployed the moment the CDN switches to
-     * Bunny, and a node deactivated afterwards would otherwise leave it running forever.
+     * settings or which environment the deploy ran under.
      */
     public function deployedContainerNames(): array
     {

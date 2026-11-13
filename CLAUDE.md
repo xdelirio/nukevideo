@@ -214,8 +214,7 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
 - Everything a deploy names is prefixed `nukevideo_dev_` in local and `nukevideo_` otherwise
   (`Node::containerPrefix()`). Both environments number their nodes from their own database, so
   without that a dev deploy would replace the production containers on the same host. Vector is
-  deployed **only on proxy nodes with the self-hosted CDN** — nothing else produces the access-log
-  lines it ships, and Bunny is covered by `bunny:ingest-logs`.
+  deployed **only on proxy nodes** — nothing else produces the access-log lines it ships.
 - Retrying a video takes more than `status = pending`: delete its `job_batches` row first (the
   chunks survive, so the retry is a cache hit).
 - **`Project` extends `Model`, not `Authenticatable`.** A project API key authenticates *as the

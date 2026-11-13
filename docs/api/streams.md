@@ -81,8 +81,8 @@ viewer is the integrator's job.
 
 Read the bytes back per id with `topTrackingIds` on the
 [Analytics API](/api/analytics#bandwidth-by-tracking-id), optionally narrowed to one video. The id is
-attributed from the CDN's access log, so it lands **after** the transfer, not with the link: a
-self-hosted edge reports within seconds, a Bunny pull zone within about seven minutes.
+attributed from the edge's access log, so it lands **after** the transfer, not with the link,
+normally within seconds.
 
 **Response:**
 
@@ -182,8 +182,8 @@ failed automatically after about seven hours.
 While a track is `processing` it cannot be edited or deleted (`409`). A `failed` track can be
 deleted. A `ready` one is an ordinary stream: edit, download and delete it like any other.
 
-Players may take a moment to see the new track: self-hosted delivery edges cache manifests for
-about 30 seconds; with Bunny, the manifest's cache TTL applies.
+Players may take a moment to see the new track: the delivery edges cache manifests for about
+30 seconds.
 
 ## Delete Stream
 

@@ -33,13 +33,10 @@ Encoded output is packaged **once** by shaka-packager into static CMAF: each out
 ### Encoding Templates
 Define reusable encoding configurations with custom video/audio streams, resolutions, bitrates, and codecs. Apply them to any video with a single API call.
 
-### Flexible Delivery
-Choose per deployment how packaged content reaches viewers:
+### Self-Hosted Delivery
+Packaged content reaches viewers through **proxy nodes** you run: a custom nginx build that validates Akamai-style stream tokens, serves the pre-packaged CMAF from S3 with AWS auth, and caches segments locally (manifests for 30 seconds).
 
-- **Self-hosted proxy nodes** — A custom nginx build that validates Akamai-style stream tokens, serves the pre-packaged CMAF from S3 with AWS auth, and caches segments locally (manifests for 30 seconds).
-- **Bunny CDN** — A Bunny pull-zone with HMAC token authentication that pulls directly from your S3 origin, with no proxy nodes to operate.
-
-See [CDN & Delivery](/guide/cdn) for a full comparison.
+See [CDN & Delivery](/guide/cdn) for the details.
 
 ### Analytics & Monitoring
 Track bandwidth consumption and per-video usage through built-in analytics, and monitor encoding progress and node health from the admin panel.
@@ -54,4 +51,4 @@ Upload → S3 → Webhook → Encode (chunked) → Package (CMAF) → S3 → Del
 2. A webhook notifies NukeVideo that a new file is ready.
 3. Worker nodes probe the source (per-title VMAF), split it into chunks, and encode them in parallel.
 4. shaka-packager builds static CMAF (shared HLS + DASH segments, plus subtitles) and the result is synced to S3.
-5. Content is delivered via self-hosted proxy nodes or Bunny CDN, both gated by token-based access control.
+5. Content is delivered via self-hosted proxy nodes, gated by token-based access control.

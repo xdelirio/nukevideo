@@ -341,9 +341,8 @@ a manifest link covers the whole playback directory. They are **not bound to the
 with [IP binding](/guide/cdn#ip-binding) on, and `speedLimitKbps` does not apply to them — a few
 kilobytes of text is not what either protects. And their bytes are booked as `download_bytes` in
 [analytics](/api/analytics), under the same `trackingId`, because they are served from the download
-zone. The self-hosted edge sends them with open CORS, so a cross-origin
-`<track crossorigin="anonymous">` loads them; on Bunny that is the pull zone's own CORS setting,
-which has to include `vtt`.
+zone. The edge sends them with open CORS, so a cross-origin
+`<track crossorigin="anonymous">` loads them.
 
 Every URL in one answer expires at the same `expiresAt`: they are signed in the same request
 against the same provider window. Responds `409` while the video is still processing and `503`

@@ -249,7 +249,7 @@ describe('syncing a proxy', function () {
 describe('the deploy', function () {
     beforeEach(function () {
         AppSettings::fake(['ssh_private_key' => 'PRIVATE', 'ssh_public_key' => 'ssh-ed25519 AAAA nukevideo', 'ssh_fingerprint' => 'ff']);
-        CdnSettings::fake(['provider' => 'self_hosted', 'providers' => ['self_hosted' => ['token_secret' => 'abcd']]]);
+        CdnSettings::fake(['token_secret' => 'abcd']);
         config(['nuke.registry' => 'registry.test']);
     });
 

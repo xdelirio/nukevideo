@@ -1,9 +1,8 @@
 # Analytics
 
 Delivery bandwidth, viewer IPs, encoding time and account consumption, read from the `usage_daily` table. This is
-the read side of the CDN access logs: the self-hosted edges ship them through Vector and Bunny pull
-zones are polled by `bunny:ingest-logs` ([CDN & Delivery](/guide/cdn#how-the-log-ingestion-works)),
-and both land in that table.
+the read side of the CDN access logs, which the edges ship through Vector
+([CDN & Delivery](/guide/cdn)) into that table.
 
 Everything on this page is readable with **any authenticated token** — a personal access token or a
 [project API key](/api/authentication) — except [per-node delivery](#per-node-delivery), which is
@@ -609,9 +608,8 @@ the bytes in it are bytes somebody consumed and nobody was billed for.
 :::
 
 ::: tip
-Bandwidth is only as complete as the ingestion behind it: a Bunny pull zone is polled every five
-minutes over a window that trails two minutes behind, so the last few minutes of traffic are
-normally not in yet.
+Bandwidth is only as complete as the ingestion behind it: an edge ships its log in batches and
+the API ingests them from a queue, so the last moments of traffic are normally not in yet.
 :::
 
 ::: warning Deleted videos leave their bytes behind

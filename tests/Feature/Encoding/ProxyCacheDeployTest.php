@@ -75,13 +75,7 @@ function inDevelopment(): void
 
 beforeEach(function () {
     config(['nuke.registry' => null]);
-    CdnSettings::fake([
-        'provider' => 'self_hosted',
-        'providers' => [
-            'self_hosted' => ['token_secret' => 'secret'],
-            'bunny' => ['host' => 'cdn.example.com', 'token_key' => 'key'],
-        ],
-    ]);
+    CdnSettings::fake(['token_secret' => 'secret']);
 });
 
 describe('a production proxy deploy', function () {

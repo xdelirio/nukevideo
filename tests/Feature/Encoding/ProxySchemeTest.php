@@ -20,7 +20,7 @@ beforeEach(function () {
     app()->detectEnvironment(fn () => 'local');
     config(['nuke.registry' => '10.0.0.240:5000']);
     AppSettings::fake(['ssh_private_key' => 'PRIVATE', 'ssh_public_key' => 'ssh-ed25519 AAAA nukevideo', 'ssh_fingerprint' => 'ff']);
-    CdnSettings::fake(['provider' => 'self_hosted', 'providers' => ['self_hosted' => ['token_secret' => 'secret']]]);
+    CdnSettings::fake(['token_secret' => 'secret']);
 
     $this->node = Node::create([
         'ip_address' => '10.0.0.240', 'user' => 'deploy', 'name' => 'edge', 'type' => 'proxy',

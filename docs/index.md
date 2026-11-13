@@ -24,8 +24,8 @@ features:
     title: Static CMAF Packaging
     details: shaka-packager builds each output once into shared CMAF segments that serve both HLS and DASH, with subtitles grafted into the same manifests. No on-the-fly repackaging.
   - icon: 📡
-    title: Flexible Delivery
-    details: Serve through self-hosted proxy nodes with token-validated S3 delivery, or point a Bunny CDN pull-zone at your S3 origin. Chosen per deployment.
+    title: Self-Hosted Delivery
+    details: Serve through self-hosted proxy nodes with token-validated, S3-backed, edge-cached delivery.
   - icon: 🗄️
     title: S3-Compatible Storage
     details: Store originals and packaged output in any S3-compatible service — AWS S3, MinIO, RustFS, iDrive e2 — with s5cmd for fast transfers.

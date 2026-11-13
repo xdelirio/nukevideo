@@ -58,7 +58,6 @@ They handle:
 - Cloudflare real-IP resolution
 - Shipping access-log bandwidth to the API via Vector.dev
 
-> **Alternative:** You don't have to run proxy nodes at all. **Bunny CDN** can deliver the same static CMAF straight from your S3 origin, configured entirely from the admin panel. See [CDN & Delivery](/guide/cdn) to decide which fits your deployment.
 
 ### Cache disks
 
@@ -103,7 +102,7 @@ A proxy is **routable** when it is active, has a hostname, is not draining and i
 
 **Draining.** Toggle it on a node before maintenance or before taking it out for good. New playback links go to its ring neighbours; the node goes on serving the sessions it has. Stopping a node, by contrast, takes its containers down. Playback links stay valid for the token window (an hour by default), and the segments a session fetches expire with its link: wait that long after draining before stopping it, and nobody notices.
 
-**Health.** `nodes:probe` runs every minute on the API host (when the self-hosted CDN is the provider) and fetches `/healthz` on every active proxy with a hostname. The edge answers with a header carrying its own node id, and only that counts as alive — a 404 from Traefik, a 403 from Cloudflare or somebody else's site at the hostname all count as silence. After three consecutive failures the node is taken out of new links and marked **unhealthy** in the panel; the first good probe puts it back, as does a successful deploy or start. Failures in the first 10 minutes after a deploy or an edit of the node are not counted, which covers a certificate still being issued or DNS still settling. Sessions already on a node that dies are lost; this is for the next ones. Should every proxy look dead at once, the resolver assumes the probe is wrong rather than the fleet and keeps linking to all active nodes.
+**Health.** `nodes:probe` runs every minute on the API host and fetches `/healthz` on every active proxy with a hostname. The edge answers with a header carrying its own node id, and only that counts as alive — a 404 from Traefik, a 403 from Cloudflare or somebody else's site at the hostname all count as silence. After three consecutive failures the node is taken out of new links and marked **unhealthy** in the panel; the first good probe puts it back, as does a successful deploy or start. Failures in the first 10 minutes after a deploy or an edit of the node are not counted, which covers a certificate still being issued or DNS still settling. Sessions already on a node that dies are lost; this is for the next ones. Should every proxy look dead at once, the resolver assumes the probe is wrong rather than the fleet and keeps linking to all active nodes.
 
 An edge from before `/healthz` existed fails the probe and drops out of rotation: redeploy it.
 

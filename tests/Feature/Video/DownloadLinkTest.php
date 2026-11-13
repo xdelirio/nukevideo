@@ -53,10 +53,7 @@ beforeEach(function () {
     Storage::fake('s3');
 
     // Signed links only: attribution hangs off the token, and an unsigned edge mints none.
-    CdnSettings::fake([
-        'provider' => 'self_hosted',
-        'providers' => ['self_hosted' => ['token_secret' => bin2hex('secret'), 'token_window' => 3600], 'bunny' => []],
-    ]);
+    CdnSettings::fake(['token_secret' => bin2hex('secret'), 'token_window' => 3600]);
 
     Node::create([
         'name' => 'edge',

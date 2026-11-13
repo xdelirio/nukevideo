@@ -113,7 +113,7 @@ class Video extends Model
      * Primary-S3 zones, one per authorization boundary.
      *
      * A CDN token authorizes the *directory* of the URL it signs and the edge compares that ACL as a
-     * raw byte prefix ({@see \App\Services\Cdn\SelfHostedProvider::aclFor}), so whatever directory a
+     * raw byte prefix ({@see \App\Services\Cdn\EdgeLinkSigner::aclFor}), so whatever directory a
      * manifest sits in is exactly how far every playback link reaches. Keeping playback in its own
      * sub-dir is therefore the whole mechanism: it is what stops a playback link from also fetching
      * the full-quality masters and the archived original.

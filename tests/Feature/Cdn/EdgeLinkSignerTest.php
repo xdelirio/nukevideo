@@ -6,7 +6,7 @@ use App\Models\Project;
 use App\Models\Stream;
 use App\Models\User;
 use App\Models\Video;
-use App\Services\Cdn\SelfHostedProvider;
+use App\Services\Cdn\EdgeLinkSigner;
 use App\Settings\CdnSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -21,29 +21,17 @@ uses(RefreshDatabase::class);
  * That is what let a playback token reach the full-quality masters, and it is the one property that
  * silently comes back if a manifest ever moves out of the play zone.
  */
-function fakeSelfHostedSettings(): void
+function fakeEdgeSettings(): void
 {
     CdnSettings::fake([
-        'provider' => 'self_hosted',
-        'providers' => [
-            'self_hosted' => [
-                'token_secret' => bin2hex('secret'),
-                'token_window' => 3600,
-            ],
-            'bunny' => [],
-        ],
+        'token_secret' => bin2hex('secret'),
+        'token_window' => 3600,
     ]);
 }
 
 function bindIpSettings(): void
 {
-    CdnSettings::fake([
-        'provider' => 'self_hosted',
-        'providers' => [
-            'self_hosted' => ['token_secret' => bin2hex('secret'), 'token_window' => 3600, 'bind_ip' => true],
-            'bunny' => [],
-        ],
-    ]);
+    CdnSettings::fake(['token_secret' => bin2hex('secret'), 'token_window' => 3600, 'bind_ip' => true]);
 }
 
 /** The ACL the edge would enforce, with the trailing `*` stripped: everything it authorizes starts with this. */
@@ -80,12 +68,12 @@ function signedVideo(): array
 function aclOf(Video $video, string $path): string
 {
     return signedAclPrefix(
-        app(SelfHostedProvider::class)->manifestUrl($video, $path, '1.2.3.4', true)->url
+        app(EdgeLinkSigner::class)->manifestUrl($video, $path, '1.2.3.4')->url
     );
 }
 
 beforeEach(function () {
-    fakeSelfHostedSettings();
+    fakeEdgeSettings();
 
     Node::create([
         'name' => 'edge',
@@ -153,7 +141,7 @@ it('pins why the manifest may never sit at the video root again', function () {
 it('refuses to sign a bucket-wide ACL', function () {
     [$video] = signedVideo();
 
-    app(SelfHostedProvider::class)->manifestUrl($video, 'manifest.mpd', '1.2.3.4', true);
+    app(EdgeLinkSigner::class)->manifestUrl($video, 'manifest.mpd', '1.2.3.4');
 })->throws(InvalidArgumentException::class);
 
 describe('the token handed back with a link', function () {
@@ -163,7 +151,7 @@ describe('the token handed back with a link', function () {
         // The ingest will hash the `__hdnea__` value it reads off the edge log; the mint recorded
         // its mapping under the hash of THIS token, so the two must be the same bytes — the whole
         // `exp=…~acl=…~hmac=…` string, not the hmac alone.
-        $link = app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), '1.2.3.4', false);
+        $link = app(EdgeLinkSigner::class)->manifestUrl($video, $output->manifestPath('dash'), '1.2.3.4');
 
         parse_str((string) parse_url($link->url, PHP_URL_QUERY), $query);
 
@@ -173,13 +161,10 @@ describe('the token handed back with a link', function () {
     });
 
     it('is null when the edge signs nothing', function () {
-        CdnSettings::fake([
-            'provider' => 'self_hosted',
-            'providers' => ['self_hosted' => ['token_secret' => '', 'token_window' => 3600], 'bunny' => []],
-        ]);
+        CdnSettings::fake(['token_secret' => '', 'token_window' => 3600]);
         [$video, $output] = signedVideo();
 
-        $link = app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), '1.2.3.4', false);
+        $link = app(EdgeLinkSigner::class)->manifestUrl($video, $output->manifestPath('dash'), '1.2.3.4');
 
         expect($link->token)->toBeNull()
             ->and($link->tokenHash)->toBeNull()
@@ -191,7 +176,7 @@ describe('the address signed into a playback link', function () {
     it('is left out unless the operator binds links to it, since the edge enforces any it finds', function () {
         [$video, $output] = signedVideo();
 
-        $link = app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), '203.0.113.7', false);
+        $link = app(EdgeLinkSigner::class)->manifestUrl($video, $output->manifestPath('dash'), '203.0.113.7');
 
         expect($link->token)->not->toContain('ip=');
     });
@@ -200,7 +185,7 @@ describe('the address signed into a playback link', function () {
         bindIpSettings();
         [$video, $output] = signedVideo();
 
-        $link = app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), $given, false);
+        $link = app(EdgeLinkSigner::class)->manifestUrl($video, $output->manifestPath('dash'), $given);
 
         // nginx renders $remote_addr compressed and lowercase, and its IPv4 listener never sees
         // a mapped address: with binding on, anything else was a 403 for the very viewer it named.
@@ -215,7 +200,7 @@ describe('the address signed into a playback link', function () {
         bindIpSettings();
         [$video] = signedVideo();
 
-        $link = app(SelfHostedProvider::class)->downloadUrl($video->ulid, "{$video->ulid}/download/video/720.mp4", false);
+        $link = app(EdgeLinkSigner::class)->downloadUrl($video->ulid, "{$video->ulid}/download/video/720.mp4");
 
         expect($link->token)->not->toContain('~ip=');
     });
