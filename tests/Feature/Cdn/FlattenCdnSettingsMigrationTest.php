@@ -27,7 +27,7 @@ function storeLegacyCdnSettings(array $providers, string $provider = 'bunny'): v
     ]);
 }
 
-it('carries the edge config over and drops the provider switch and the Bunny credentials', function () {
+it('carries the edge config over and drops the Bunny credentials', function () {
     storeLegacyCdnSettings([
         'self_hosted' => [
             'token_secret' => 'abcd',
@@ -50,9 +50,32 @@ it('carries the edge config over and drops the provider switch and the Bunny cre
         ->and($settings->bind_ip)->toBeTrue()
         ->and($settings->allowed_domains)->toBe(['example.com'])
         ->and($settings->allow_null_origin)->toBeFalse()
-        ->and(DB::table('settings')->where('group', 'cdn')->pluck('name')->sort()->values()->all())
-        ->toBe(['allow_null_origin', 'allowed_domains', 'bind_ip', 'token_name', 'token_secret', 'token_window'])
-        ->and(DB::table('settings')->where('group', 'cdn')->pluck('payload')->implode(' '))->not->toContain('bunny');
+        ->and(DB::table('settings')->where('group', 'cdn')->pluck('payload')->implode(' '))
+        ->not->toContain('bunny')->not->toContain('cache_max_size');
+});
+
+it('leaves the previous release a provider it can still resolve', function () {
+    // Worker nodes keep running the previous image until they are redeployed, and that image
+    // reads these two rows whenever it builds a webhook payload. Gone, or still naming Bunny,
+    // every video finishing in that window would throw.
+    storeLegacyCdnSettings([
+        'self_hosted' => ['token_secret' => 'abcd'],
+        'bunny' => ['host' => 'zone.b-cdn.net', 'token_key' => 'bunny-key'],
+    ]);
+
+    flattenMigration()->up();
+
+    $stored = DB::table('settings')->where('group', 'cdn')->pluck('payload', 'name');
+
+    expect(json_decode($stored['provider'], true))->toBe('self_hosted')
+        ->and(json_decode($stored['providers'], true))->toBe(['self_hosted' => [
+            'token_secret' => 'abcd',
+            'token_name' => '__hdnea__',
+            'token_window' => 3600,
+            'bind_ip' => false,
+            'allowed_domains' => [],
+            'allow_null_origin' => false,
+        ]]);
 });
 
 it('falls back to the defaults for what was never stored', function () {
@@ -74,12 +97,17 @@ it('can be run again, and rolled back to the map it replaced', function () {
     flattenMigration()->up();
     flattenMigration()->up();
 
-    expect(app(CdnSettings::class)->refresh()->token_window)->toBe(900);
+    $settings = app(CdnSettings::class)->refresh();
+    expect($settings->token_window)->toBe(900);
+
+    // Saved from the panel while the migration was applied: the rollback must keep it.
+    $settings->token_window = 1200;
+    $settings->save();
 
     flattenMigration()->down();
 
     $stored = DB::table('settings')->where('group', 'cdn')->pluck('payload', 'name');
 
     expect($stored->keys()->sort()->values()->all())->toBe(['provider', 'providers'])
-        ->and(json_decode($stored['providers'], true)['self_hosted'])->toMatchArray(['token_secret' => 'abcd', 'token_window' => 900]);
+        ->and(json_decode($stored['providers'], true)['self_hosted'])->toMatchArray(['token_secret' => 'abcd', 'token_window' => 1200]);
 });
