@@ -595,11 +595,16 @@ class NodeService
             $labels[] = "traefik.http.routers.{$router}.rule=Host(`{$node->hostname}`)";
             $labels[] = "traefik.http.routers.{$router}.entrypoints={$entrypoint}";
             $labels[] = "traefik.http.services.{$router}.loadbalancer.server.port=80";
-            // TLS without naming a resolver: the certificate is the business of whichever Traefik
-            // fronts the edge. Ours makes `le` the default of `websecure` ({@see traefikVars});
-            // a host whose own reverse proxy holds port 80 uses the default it was given.
+            // TLS on the router; the resolver is added on the node, and only when our own Traefik
+            // fronts the edge (EDGE_CERT_RESOLVER, below). It cannot be left to the `websecure`
+            // default ({@see traefikVars}): Traefik applies an entrypoint's TLS defaults only to
+            // routers that define no TLS of their own, so with `tls=true` here ours never asked
+            // for a certificate and served its self-signed default. Behind Cloudflare's proxy that
+            // went unnoticed; a DNS-only edge failed every handshake. Named unconditionally, a
+            // host's own reverse proxy without an `le` resolver would refuse the router instead.
             if ($tls) {
                 $labels[] = "traefik.http.routers.{$router}.tls=true";
+                $certResolverLabel = '${EDGE_CERT_RESOLVER:+-l "traefik.http.routers.'.$router.'.tls.certresolver=$EDGE_CERT_RESOLVER"}';
             }
         }
 
@@ -622,6 +627,7 @@ class NodeService
                 // Set by proxy.sh when the host's own reverse proxy holds port 80: the network the
                 // edge joins to be reachable from it, named so that proxy routes over that one.
                 '${EDGE_PROXY_NETWORK:+-l "traefik.docker.network=$EDGE_PROXY_NETWORK"}',
+                ...(isset($certResolverLabel) ? [$certResolverLabel] : []),
             ],
             'log_opts' => self::PROXY_LOG_OPTS,
             // nginx is PID 1, and SIGTERM is its fast shutdown: open connections are dropped.
