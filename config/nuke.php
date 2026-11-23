@@ -31,9 +31,12 @@ return [
         // the chunk store ({@see \App\Support\OomScore}). 0 switches it off.
         'chunk_oom_score_adj' => (int) env('CHUNK_OOM_SCORE_ADJ', 1000),
 
-        // There is deliberately no `concurrent` here any more. How many videos may be in flight is
-        // derived from the active nodes of each hardware family
+        // There is deliberately no fleet-wide `concurrent` here. How many videos may be in flight
+        // is derived from the active nodes of each hardware family
         // ({@see \App\Console\Commands\DispatchPendingVideosCommand}), because a fixed number
-        // drifts silently the moment the fleet changes.
+        // drifts silently the moment the fleet changes. What is tunable is the share per node:
+        // read on the API host, where `videos:dispatch` runs. Keep it in step with the nodes'
+        // ORCHESTRATION_WORKER_PROCESSES, or the extra videos only queue for a preparation slot.
+        'videos_per_node' => (int) env('VIDEOS_PER_NODE', 5),
     ],
 ];
