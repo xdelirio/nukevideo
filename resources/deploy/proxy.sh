@@ -95,6 +95,11 @@ $SUDO sysctl -q -e -p /etc/sysctl.d/90-nukevideo-edge.conf || echo "WARNING: som
 # Traefik shares nukevideo_default with the edge, and the label would send it elsewhere.
 HOST_PROXY=$(docker ps --format '{{.Names}} {{.Ports}}' | grep -v '^nukevideo_traefik ' | grep ':80->' | awk '{ print $1; exit }')
 EDGE_PROXY_NETWORK=""
+# Our Traefik gets certificates from its `le` resolver, which the edge's router has to name: an
+# entrypoint's default resolver never reaches a router that sets TLS itself. A host's own proxy
+# keeps whatever it is configured with.
+EDGE_CERT_RESOLVER=""
+[ -z "$HOST_PROXY" ] && EDGE_CERT_RESOLVER=le
 if [ -n "$HOST_PROXY" ]; then
     if docker network inspect "$HOST_PROXY_NETWORK" &>/dev/null; then
         EDGE_PROXY_NETWORK=$HOST_PROXY_NETWORK

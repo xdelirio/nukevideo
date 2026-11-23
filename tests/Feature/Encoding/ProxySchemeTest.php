@@ -39,10 +39,13 @@ it('serves the edge over TLS when APP_URL is https, even in development', functi
     expect(Node::proxyScheme())->toBe('https://')
         ->and($script)->toContain("traefik.http.routers.{$router}.entrypoints=websecure")
         ->and($script)->toContain("traefik.http.routers.{$router}.tls=true")
-        // No resolver named: whichever Traefik fronts the edge picks it — ours defaults
-        // `websecure` to `le`, a host's own reverse proxy to whatever it is configured with.
-        ->and($script)->not->toContain("traefik.http.routers.{$router}.tls.certresolver")
-        ->and($script)->toContain('--entrypoints.websecure.http.tls.certresolver=le')
+        // The resolver is named on the router, since Traefik ignores the entrypoint default for
+        // a router with TLS of its own — but only when the node set EDGE_CERT_RESOLVER, i.e. our
+        // Traefik fronts the edge, not a host's own reverse proxy.
+        ->and($script)->toContain('${EDGE_CERT_RESOLVER:+-l "traefik.http.routers.'.$router.'.tls.certresolver=$EDGE_CERT_RESOLVER"}')
+        ->and($script)->toContain('[ -z "$HOST_PROXY" ] && EDGE_CERT_RESOLVER=le')
+        ->and(strpos($script, 'EDGE_CERT_RESOLVER=le'))->toBeLessThan(strpos($script, 'run_container "$RUN_ARGS"'))
+        ->and($script)->toContain('--certificatesresolvers.le.acme.httpchallenge.entrypoint=web')
         ->and(app(NodeService::class)->getEnvironmentVariables($this->node))->toContain('VOD_BASE_URL=https://nv-cdn.delirio.org');
 });
 
