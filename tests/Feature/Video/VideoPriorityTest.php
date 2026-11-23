@@ -26,6 +26,9 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     Queue::fake();
 
+    // Three slots on one node keep the orderings below short; the default is pinned elsewhere.
+    config(['nuke.video.videos_per_node' => 2]);
+
     $this->user = User::factory()->create();
     $this->project = Project::factory()->for($this->user)->create();
 

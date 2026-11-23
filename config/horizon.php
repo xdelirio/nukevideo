@@ -65,12 +65,15 @@ $heavyWorker = [
 // Dedicated orchestration supervisor: the light per-video jobs that aren't chunk transcode
 // (source download/probe/segment, thumbnail, storyboard, sidecar, cleanup). Runs on every
 // worker so it always has a consumer, independent of which hardware queues exist in the fleet.
+// Its size is how many videos a node prepares at once, and preparing (download, per-title probes)
+// is most of a video's time on the node: keep it in step with the API's VIDEOS_PER_NODE.
+$orchestrationProcesses = max(1, (int) env('ORCHESTRATION_WORKER_PROCESSES', 5));
 $orchestrationWorker = [
     'connection' => 'redis',
     'queue' => ['orchestration'],
     'balance' => 'none',
-    'minProcesses' => 3,
-    'maxProcesses' => 3,
+    'minProcesses' => $orchestrationProcesses,
+    'maxProcesses' => $orchestrationProcesses,
     'maxTime' => 0,
     'maxJobs' => 0,
     'memory' => 1024,

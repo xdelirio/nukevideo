@@ -22,6 +22,9 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     Queue::fake();
 
+    // The arithmetic below reads easiest at two per node; the default is pinned on its own.
+    config(['nuke.video.videos_per_node' => 2]);
+
     Node::create(['name' => 'cpu-01', 'ip_address' => '10.0.0.20', 'type' => 'worker']);
 
     $user = User::factory()->create();
@@ -65,6 +68,16 @@ it('dispatches two videos per node of the family, plus one', function () {
     Queue::assertPushed(PrepareVideoJob::class, 3);
     expect(Video::where('status', VideoStatus::RUNNING->value)->count())->toBe(3)
         ->and(Video::where('status', VideoStatus::PENDING->value)->count())->toBe(2);
+});
+
+it('admits five per node unless the API host says otherwise', function () {
+    // What a host with no VIDEOS_PER_NODE gets: one CPU node, so six in flight.
+    config(['nuke.video.videos_per_node' => (require config_path('nuke.php'))['video']['videos_per_node']]);
+    collect(range(1, 8))->each(fn () => ($this->makeVideo)());
+
+    $this->artisan('videos:dispatch')->assertSuccessful();
+
+    Queue::assertPushed(PrepareVideoJob::class, 6);
 });
 
 it('counts what is already in flight against the same cap', function () {

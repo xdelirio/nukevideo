@@ -228,15 +228,13 @@ class DispatchPendingVideosCommand extends Command
     /** @var array<string, int> Memoised per tick; the fleet cannot change mid-run. */
     private array $limits = [];
 
-    /** Videos a node keeps in flight: one feeding its encoders while the next one prepares. */
-    private const VIDEOS_PER_NODE = 2;
-
     /**
-     * How many videos this hardware family may have in flight: two per active node, plus one.
+     * How many videos this hardware family may have in flight: `nuke.video.videos_per_node` per
+     * active node, plus one.
      *
-     * Derived rather than configured, because a fixed number drifts the moment the fleet changes —
-     * and it drifts silently, leaving nodes idle or the queue starved until someone remembers to
-     * edit it and redeploy.
+     * Scaled by the fleet rather than a fixed total, because a fixed number drifts the moment the
+     * fleet changes — and it drifts silently, leaving nodes idle or the queue starved until
+     * someone remembers to edit it and redeploy. Only the share per node is configured.
      *
      * A slot is held from the claim until the video is settled, and most of that time the video
      * feeds no encoder: it is downloading and probing (a median of eight minutes), or packaging
@@ -247,12 +245,21 @@ class DispatchPendingVideosCommand extends Command
      * a risk to their heartbeats any more, since the reaper leaves a video alone while its batch
      * still has jobs waiting.
      *
+     * Two was still too few once videos got short. On a 192-thread node, videos of ~130 chunks
+     * spent ~290 s preparing and ~70 s encoding, so with three in flight all of them were often
+     * preparing or packaging at once: sampled every ten seconds, the node ran 0 chunk encodes over
+     * a third of the time and sat 74% idle. Five per node keeps encoders fed through a preparation;
+     * it only helps with as many orchestration workers on the node to run those preparations
+     * ({@see config/horizon.php}).
+     *
      * A family with no nodes at all lands on 1, which never dispatches anything: `missingCapacity()`
      * below turns those away first, and says why.
      */
     private function limitFor(string $capacity): int
     {
-        return $this->limits[$capacity] ??= 1 + self::VIDEOS_PER_NODE * Node::worker()->active()
+        $perNode = max(1, (int) config('nuke.video.videos_per_node'));
+
+        return $this->limits[$capacity] ??= 1 + $perNode * Node::worker()->active()
             ->when(
                 $capacity === Template::CPU,
                 fn ($q) => $q->whereNull('accel'),

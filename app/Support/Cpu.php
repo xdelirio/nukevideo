@@ -139,9 +139,9 @@ class Cpu
 
     /**
      * Sample encodes a per-title probe runs at once. The probe lives inside one orchestration slot
-     * and up to three preparations run per node, so it may not take the node — but two at a time
-     * on a 224-thread box left a pair of 1080p anchors taking 330-365 s under load, where eight
-     * took 120. One per sixteen cores, between two and four.
+     * and several preparations run per node (ORCHESTRATION_WORKER_PROCESSES), so it may not take
+     * the node — but two at a time on a 224-thread box left a pair of 1080p anchors taking
+     * 330-365 s under load, where eight took 120. One per sixteen cores, between two and four.
      */
     public static function probeConcurrency(): int
     {
