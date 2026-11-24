@@ -7,6 +7,7 @@ use App\Exceptions\EncodeInterruptedException;
 use App\Jobs\Concerns\CompletesVideo;
 use App\Models\Stream;
 use App\Models\Video;
+use App\Services\ChunkTranscodeService;
 use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\CreateVideoStreamsService;
 use App\Services\EncodeCommandBuilder;
@@ -27,8 +28,8 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Encodes every audio and subtitle track over the mirrored source, one pass per track type
- * ({@see runPass()}), and uploads each straight to S3 — no chunking, no concat. Chunking exists
+ * Encodes every audio and subtitle track over the mirrored source, in passes ({@see passes()}),
+ * and uploads each straight to S3 — no chunking, no concat. Chunking exists
  * only to bound the heavy video encode; per-segment concat would corrupt gapless codecs like Opus
  * (each segment keeps its own pre-skip priming, so a `-c copy` merge drifts shorter than the manifest).
  *
@@ -121,7 +122,7 @@ class EncodeSidecarTracksJob implements ShouldBeUnique, ShouldQueue
         try {
             $sourceUrl = PrepareVideoJob::sourceUrl($this->mirrorPath);
 
-            foreach ($streams->groupBy('type') as $pass) {
+            foreach (self::passes($streams) as $pass) {
                 $this->runPass($video, EncodeCommandBuilder::build($pass, $sourceUrl, $outputPaths), $startedAt);
 
                 // Staged pass by pass, not all at the end. `$pending` in handle() reads the
@@ -142,7 +143,25 @@ class EncodeSidecarTracksJob implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * One ffmpeg run per track type. Audio and subtitle outputs must never share a run: once the
+     * One ffmpeg pass per source audio track (all its rungs: stereo and 5.1 decode it once), and
+     * one for every subtitle together. All the audio used to share one pass: a film with six
+     * tracks and a stereo plus a 5.1 rung each was twelve Opus encodes in a single ffmpeg, which
+     * on a loaded node overran the job's budget twice and failed the video with every track lost,
+     * since nothing is staged before its pass ends. Per source track, each pass is a fraction of
+     * that, and a timeout costs only the pass it cut: the retry skips whatever was staged.
+     *
+     * @param  Collection<int,Stream>  $streams
+     * @return Collection<string,Collection<int,Stream>>
+     */
+    public static function passes(Collection $streams): Collection
+    {
+        return $streams->groupBy(fn (Stream $stream) => $stream->type === 'audio'
+            ? 'audio '.(new ChunkTranscodeService($stream))->mapTarget()
+            : $stream->type);
+    }
+
+    /**
+     * One ffmpeg run per pass. Audio and subtitle outputs must never share a run: once the
      * sparse subtitle output runs dry ffmpeg ends the whole session with exit 0, cutting every
      * audio output minutes into the source without a single line on stderr.
      */
