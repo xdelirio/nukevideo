@@ -561,6 +561,15 @@ class NodeService
                 'RUSTFS_SECRET_KEY='.$disk['secret'],
                 'RUSTFS_ADDRESS=:9000',
                 'RUSTFS_CONSOLE_ENABLE=false',
+                // RustFS hands out 64 disk-read permits by default, and a GET holds its permit for
+                // as long as the body streams. Every chunk encode streams its window for the whole
+                // encode, so three workers (~110 encodes) queued for a permit: each GET waited
+                // 2-5 s for its first byte — metadata calls answered in 10 ms, the disk sat at 5%
+                // — an encode spent ~26 s opening its source, and the nodes ran at 40% CPU.
+                // Raised on the live store, the first byte came back in 10 ms and the nodes went
+                // back to full CPU. Sized for several times the fleet's encodes; the NVMe the
+                // store runs on is nowhere near its limit at that.
+                'RUSTFS_OBJECT_MAX_CONCURRENT_DISK_READS=512',
             ],
             'labels' => ['vector.enable='.Node::containerPrefix()],
             // Prefixed like the containers: a development store must never be handed the volume

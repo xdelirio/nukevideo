@@ -24,6 +24,14 @@ class MediaSource
      * Without them a dropped connection reads as EOF: ffmpeg exits 0 and leaves an output that
      * covers only the bytes it managed to read.
      *
+     * `-rw_timeout` bounds a single read, in microseconds. A connection that is never closed —
+     * the store restarted while the read crossed a Tailscale tunnel, which drops the peer without
+     * a reset — otherwise blocks ffmpeg forever: the job times out around it, ffmpeg outlives it
+     * ignoring SIGTERM, and the node runs a dead encode beside every live one (29 at once on a
+     * home worker). Timed out, the read is a network error, which the flags below reconnect;
+     * a store that stays gone fails the encode, which is retried. 30 s is far past any read a
+     * working store takes, slow or loaded.
+     *
      * @return list<string>
      */
     public static function reconnectArguments(string $input): array
@@ -33,6 +41,7 @@ class MediaSource
         }
 
         return [
+            '-rw_timeout', '30000000',
             '-reconnect', '1',
             '-reconnect_streamed', '1',
             '-reconnect_on_network_error', '1',
