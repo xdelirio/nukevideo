@@ -1,0 +1,94 @@
+name: Front
+
+# Builds the SPA and ships it to Cloudflare Pages. A merge to main goes to staging, and a `v*`
+# tag goes to production. The checks (lint, type check) run here too, so a deploy only ships what
+# passed them. Pull requests get the checks and the build, and nothing reaches Cloudflare.
+#
+# Each environment (GitHub Environments `staging` and `production`) holds its own VITE_URL_API,
+# so each build talks to its own API. Vite inlines it at build time.
+on:
+  # On main only when the front changed. Tags always run (path filters do not apply to them):
+  # production always matches the release.
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "front/**"
+      - ".github/workflows/front.yml"
+  pull_request:
+    paths:
+      - "front/**"
+      - ".github/workflows/front.yml"
+  workflow_dispatch:
+
+# One deploy at a time per environment, queued in order: two tags a minute apart must not race,
+# or the older build could land last on production.
+concurrency:
+  group: front-deploy-${{ startsWith(github.ref, 'refs/tags/') && 'production' || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  front:
+    name: Front (build + deploy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    # The tag picks the environment, and with it the API URL the build is made against.
+    environment: ${{ startsWith(github.ref, 'refs/tags/') && 'production' || 'staging' }}
+    defaults:
+      run:
+        working-directory: front
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: front/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm exec eslint .
+
+      - name: Type check
+        run: pnpm run type-check
+
+      # build-only, not build: the type check above already ran, and running it twice is minutes.
+      - name: Build
+        env:
+          VITE_URL_API: ${{ vars.VITE_URL_API }}
+        run: |
+          for name in VITE_URL_API; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is empty in this environment."
+              exit 1
+            fi
+          done
+          pnpm run build-only
+
+      # No 404.html in dist: Pages then answers any path with index.html, which is what
+      # createWebHistory() needs. Production is the project's production branch (main); staging is
+      # a branch alias of the same project, staging.nukevideo-web.pages.dev.
+      - name: Deploy to Cloudflare Pages
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PAGES_BRANCH: ${{ startsWith(github.ref, 'refs/tags/') && 'main' || 'staging' }}
+        run: >-
+          pnpm dlx wrangler@4 pages deploy dist
+          --project-name=nukevideo-web
+          --branch="$PAGES_BRANCH"
+          --commit-hash=${{ github.sha }}

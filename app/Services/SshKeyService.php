@@ -89,8 +89,8 @@ class SshKeyService
 
         foreach (Node::orderBy('id')->get() as $node) {
             try {
-                $this->ssh->run($node->ip_address, $node->user, $oldPrivate, self::installCommand($newPublic), timeout: 30);
-                $this->ssh->run($node->ip_address, $node->user, $newPrivate, 'true', timeout: 15);
+                $this->ssh->run($node->sshHost(), $node->user, $oldPrivate, self::installCommand($newPublic), timeout: 30);
+                $this->ssh->run($node->sshHost(), $node->user, $newPrivate, 'true', timeout: 15);
                 $results[] = new NodeRotationData($node->id, $node->name, true, null);
             } catch (\Throwable $e) {
                 $error = $node->is_active

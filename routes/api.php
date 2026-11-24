@@ -201,6 +201,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::put('app-settings/cloudflare', [AppSettingsController::class, 'updateCloudflare']);
         Route::delete('app-settings/cloudflare', [AppSettingsController::class, 'destroyCloudflare']);
         Route::get('app-settings/cloudflare/zones', [AppSettingsController::class, 'cloudflareZones']);
+        Route::put('app-settings/tailscale', [AppSettingsController::class, 'updateTailscale']);
+        Route::delete('app-settings/tailscale', [AppSettingsController::class, 'destroyTailscale']);
 
         Route::get('cdn-settings', [CdnSettingsController::class, 'show']);
         Route::patch('cdn-settings', [CdnSettingsController::class, 'update']);

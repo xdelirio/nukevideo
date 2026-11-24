@@ -264,10 +264,10 @@ class PrepareVideoJob implements ShouldQueue
                 $video->refresh();
             }
 
-            // Thumbnail + storyboard run in parallel with the encode; they swallow their own
-            // errors so they never block or fail the video.
+            // The thumbnail runs in parallel with the encode and swallows its own errors, so it
+            // never blocks or fails the video. The storyboard is not built here: packaging builds
+            // it from a rendition already on its disk, instead of reading the whole source now.
             ExtractThumbnailJob::dispatch($video->id, $mirrorPath)->onQueue(self::QUEUE);
-            GenerateVideoStoryboard::dispatch($video->id, $mirrorPath)->onQueue(self::QUEUE);
 
             // Audio + subtitles encode in one pass, not chunked: per-chunk audio concat corrupts
             // gapless codecs like Opus (per-segment pre-skip).

@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Data\AppSettings\UpdateCloudflareData;
 use App\Data\AppSettings\UpdateSshKeyData;
+use App\Data\AppSettings\UpdateTailscaleData;
 use App\Data\AppSettingsData;
 use App\Http\Controllers\Controller;
 use App\Services\CloudflareDns;
 use App\Services\SshKeyService;
 use App\Settings\AppSettings;
 use App\Settings\CloudflareSettings;
+use App\Settings\TailscaleSettings;
 use Illuminate\Http\JsonResponse;
 
 class AppSettingsController extends Controller
@@ -51,6 +53,26 @@ class AppSettingsController extends Controller
         $cloudflare->api_token = '';
         $cloudflare->proxied = false;
         $cloudflare->save();
+
+        return response()->json(['data' => AppSettingsData::fromSettings($settings)]);
+    }
+
+    public function updateTailscale(UpdateTailscaleData $data, TailscaleSettings $tailscale, AppSettings $settings): JsonResponse
+    {
+        $tailscale->auth_key = $data->authKey;
+        $tailscale->save();
+
+        return response()->json(['data' => AppSettingsData::fromSettings($settings)]);
+    }
+
+    /**
+     * Forgets the key. Nodes already joined stay in the tailnet: their login lives on the node, and
+     * removing the key only stops the next deploy from joining a node that is not in it.
+     */
+    public function destroyTailscale(TailscaleSettings $tailscale, AppSettings $settings): JsonResponse
+    {
+        $tailscale->auth_key = '';
+        $tailscale->save();
 
         return response()->json(['data' => AppSettingsData::fromSettings($settings)]);
     }

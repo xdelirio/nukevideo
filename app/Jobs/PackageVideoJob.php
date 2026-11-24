@@ -14,6 +14,7 @@ use App\Services\Cdn\EdgeLinkSigner;
 use App\Services\ChunkTranscodeService;
 use App\Services\CreateVideoStreamsService;
 use App\Services\PackagerCommandBuilder;
+use App\Services\StoryboardService;
 use App\Services\SubtitlePackager;
 use App\Support\PrimaryStore;
 use App\Support\Scratch;
@@ -114,6 +115,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         try {
             $this->gatherSidecars($video, $gatherDir);
             $this->concatVideoStreams($video, $gatherDir);
+            $this->buildStoryboard($video, $gatherDir);
 
             foreach ($video->outputs as $output) {
                 $output->setRelation('video', $video);
@@ -213,6 +215,34 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
         foreach ($videoStreams as $stream) {
             $this->concatStream($video, $stream, $stageDir, $gatherDir);
+        }
+    }
+
+    /**
+     * From a rendition this job just concatenated on local disk ({@see StoryboardService}). Never
+     * fatal: seek-bar previews are a nicety, and a video whose every track is encoded must not fail
+     * for want of them. The VTT is then simply absent, and players scrub without previews.
+     */
+    private function buildStoryboard(Video $video, string $gatherDir): void
+    {
+        $stream = StoryboardService::pickRendition($video->streams->where('type', 'video'));
+
+        if (! $stream) {
+            return;
+        }
+
+        try {
+            app(StoryboardService::class)->generate($video, $this->localRenditionPath($stream, $gatherDir));
+            Log::info('Storyboard generated', ['video' => $video->id, 'stream' => $stream->id]);
+        } catch (Throwable $e) {
+            Log::warning('Storyboard generation failed', ['video' => $video->id, 'error' => mb_substr($e->getMessage(), 0, 500)]);
+
+            activity('video')
+                ->performedOn($video)
+                ->causedBy($video->user)
+                ->withProperties(['error' => $e->getMessage()])
+                ->event('storyboard_failed')
+                ->log("Storyboard generation failed: {$e->getMessage()}");
         }
     }
 

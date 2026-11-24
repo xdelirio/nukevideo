@@ -42,6 +42,10 @@ const cloudflareBusy = ref(false)
 const cloudflareZones = ref<string[]>([])
 const cloudflareZonesError = ref<string | null>(null)
 
+// Write-only like the token above: the panel learns whether a key is stored, never the key.
+const tailscaleKey = ref('')
+const tailscaleBusy = ref(false)
+
 async function fetchCloudflareZones() {
   cloudflareZones.value = []
   cloudflareZonesError.value = null
@@ -82,6 +86,32 @@ async function removeCloudflare() {
     await fetchCloudflareZones()
   } finally {
     cloudflareBusy.value = false
+  }
+}
+
+async function saveTailscale() {
+  tailscaleBusy.value = true
+  errors.value = {}
+  try {
+    settings.value = await AppSettingsService.setTailscale({ authKey: tailscaleKey.value })
+    tailscaleKey.value = ''
+    toast.success('Tailscale key saved')
+  } catch (error) {
+    if (error instanceof ValidationException) errors.value = error.errors
+    else if (error instanceof ApiException) toast.error(error.message)
+  } finally {
+    tailscaleBusy.value = false
+  }
+}
+
+async function removeTailscale() {
+  tailscaleBusy.value = true
+  errors.value = {}
+  try {
+    settings.value = await AppSettingsService.removeTailscale()
+    tailscaleKey.value = ''
+  } finally {
+    tailscaleBusy.value = false
   }
 }
 
@@ -327,6 +357,55 @@ onMounted(fetchSettings)
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction @click="removeCloudflare">Remove</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      </form>
+    </section>
+
+    <section v-if="!loading" class="flex flex-col gap-4 rounded-lg border p-4">
+      <div>
+        <h2 class="text-lg font-semibold">Tailscale</h2>
+        <p class="text-sm text-muted-foreground">
+          Optional. With an auth key, every worker joins the Tailscale network at its deploy, so the chunk
+          store can sit on another provider and still be reached privately. Create a reusable key in the
+          Tailscale admin console. Proxies are not joined. Workers already on the network stay there when
+          the key is removed.
+        </p>
+      </div>
+
+      <form class="grid gap-4" @submit.prevent="saveTailscale">
+        <div class="grid gap-2">
+          <Label for="tailscale_key">Auth key</Label>
+          <Input
+            id="tailscale_key"
+            v-model="tailscaleKey"
+            type="password"
+            autocomplete="off"
+            class="font-mono"
+            :required="!settings?.tailscaleConfigured"
+            :placeholder="settings?.tailscaleConfigured ? 'Stored. Leave empty to keep it' : 'tskey-auth-…'"
+          />
+          <p v-if="errors.authKey" class="text-sm text-destructive">{{ errors.authKey[0] }}</p>
+        </div>
+
+        <div class="flex gap-2">
+          <Button type="submit" size="sm" :disabled="tailscaleBusy || !tailscaleKey">{{ tailscaleBusy ? 'Saving...' : 'Save' }}</Button>
+          <AlertDialog v-if="settings?.tailscaleConfigured">
+            <AlertDialogTrigger as-child>
+              <Button type="button" variant="ghost" size="sm" :disabled="tailscaleBusy">Remove key</Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Remove the Tailscale key?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Workers already on the network stay on it. The next deploy of a worker will not join it.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction @click="removeTailscale">Remove</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>

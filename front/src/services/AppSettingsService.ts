@@ -34,6 +34,18 @@ class AppSettingsService {
     return res.data.data
   }
 
+  /** Store the Tailscale auth key the workers join the tailnet with at their next deploy. */
+  async setTailscale(payload: App.Data.AppSettings.UpdateTailscaleData): Promise<App.Data.AppSettingsData> {
+    const res = await this.api.put(`${this.BASE_PATH}/tailscale`, payload)
+    return res.data.data
+  }
+
+  /** Forget the key. Workers already on the tailnet stay there; the next deploy just does not join. */
+  async removeTailscale(): Promise<App.Data.AppSettingsData> {
+    const res = await this.api.delete(`${this.BASE_PATH}/tailscale`)
+    return res.data.data
+  }
+
   /** The zones the stored token can see, asked of Cloudflare now. */
   async cloudflareZones(): Promise<string[]> {
     const res = await this.api.get(`${this.BASE_PATH}/cloudflare/zones`)

@@ -27,6 +27,7 @@ sshPublicKey: string | null,
 sshFingerprint: string | null,
 cloudflareConfigured: boolean,
 cloudflareProxied: boolean,
+tailscaleConfigured: boolean,
 };
 export type CacheDiskData = {
 device: string,
@@ -67,6 +68,7 @@ type: App.Enums.NodeType,
 accel: App.Enums.NodeAccel | null,
 hostname: string | null,
 cloudflareProxied: boolean | null,
+tailscaleIp: string | null,
 isActive: boolean,
 isDraining: boolean,
 isHealthy: boolean,
@@ -224,6 +226,12 @@ name: string | null,
 forced: boolean,
 hearingImpaired: boolean,
 };
+namespace ActivityLog {
+export type IndexActivityLogData = {
+event: string | null,
+video: string | null,
+};
+}
 namespace Analytics {
 export type AnalyticsCardData = {
 key: string,
@@ -388,6 +396,9 @@ proxied: boolean,
 };
 export type UpdateSshKeyData = {
 privateKey: string | null,
+};
+export type UpdateTailscaleData = {
+authKey: string,
 };
 }
 namespace Auth {

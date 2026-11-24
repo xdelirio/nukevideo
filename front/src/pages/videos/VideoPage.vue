@@ -358,6 +358,10 @@ onUnmounted(stopPolling)
           <div class="flex items-center gap-2">
             <!-- The only way back into the pipeline: dispatch only ever picks up a PENDING video,
                  and nothing puts a failed one back there on its own. -->
+            <!-- Why it failed is recorded on its `video_failed` event, not on the video. -->
+            <Button v-if="video.status === 'failed'" variant="outline" size="sm" as-child>
+              <RouterLink :to="{ name: 'ActivityLog', query: { event: 'video_failed', video: video.ulid } }">Why it failed</RouterLink>
+            </Button>
             <RetryVideoButton v-if="video.status === 'failed'" :id="video.ulid" @retried="onRetried" />
             <Button v-if="video.status === 'completed'" variant="outline" size="sm" @click="addTrackDialog?.show()">
               <Plus :size="14" class="mr-1" /> Add track

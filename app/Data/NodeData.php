@@ -19,6 +19,8 @@ class NodeData extends Data
         public ?NodeAccel $accel,
         public ?string $hostname,
         public ?bool $cloudflareProxied,
+        /** The address on the tailnet, or null when the node has not joined it. */
+        public ?string $tailscaleIp,
         public bool $isActive,
         public bool $isDraining,
         public bool $isHealthy,
@@ -43,6 +45,7 @@ class NodeData extends Data
             accel: $node->accel,
             hostname: $node->hostname,
             cloudflareProxied: $node->cloudflare_proxied,
+            tailscaleIp: $node->tailscale_ip,
             isActive: $node->is_active,
             isDraining: (bool) $node->is_draining,
             isHealthy: $node->isHealthy(),

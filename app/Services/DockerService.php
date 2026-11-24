@@ -14,7 +14,7 @@ class DockerService
     public function run(Node $node, string $command, int $timeout = 30): string
     {
         return trim($this->ssh->run(
-            ip: $node->ip_address,
+            ip: $node->sshHost(),
             user: $node->user,
             privateKey: $this->sshKeys->privateKey(),
             command: "docker {$command}",

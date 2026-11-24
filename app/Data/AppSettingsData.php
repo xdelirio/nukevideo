@@ -4,6 +4,7 @@ namespace App\Data;
 
 use App\Settings\AppSettings;
 use App\Settings\CloudflareSettings;
+use App\Settings\TailscaleSettings;
 use Spatie\LaravelData\Data;
 
 class AppSettingsData extends Data
@@ -17,6 +18,9 @@ class AppSettingsData extends Data
         // private key above: it can rewrite the DNS of every zone it was scoped to.
         public bool $cloudflareConfigured,
         public bool $cloudflareProxied,
+        // Whether a Tailscale auth key is stored. Like the token above, the key is never exposed:
+        // it can add machines to the tailnet.
+        public bool $tailscaleConfigured,
     ) {}
 
     public static function fromSettings(AppSettings $settings): self
@@ -28,6 +32,7 @@ class AppSettingsData extends Data
             sshFingerprint: $settings->ssh_fingerprint !== '' ? $settings->ssh_fingerprint : null,
             cloudflareConfigured: $cloudflare->api_token !== '',
             cloudflareProxied: $cloudflare->proxied,
+            tailscaleConfigured: app(TailscaleSettings::class)->authKey() !== null,
         );
     }
 }

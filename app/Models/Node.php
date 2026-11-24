@@ -24,6 +24,7 @@ class Node extends Model
         'is_active',
         'is_draining',
         // Written by the probe and the deploy, never by the API: the Data objects do not expose them.
+        'tailscale_ip',
         'health_failures',
         'last_healthy_at',
         'log',
@@ -59,6 +60,18 @@ class Node extends Model
     public static function containerPrefix(): string
     {
         return app()->isLocal() ? 'nukevideo_dev' : 'nukevideo';
+    }
+
+    /**
+     * The address the panel opens SSH to: the tailnet one once the node has joined, the public one
+     * until then. Every SSH call goes through here, so a worker on the tailnet can close port 22
+     * to the internet. Only SSH: the DNS record and the chunk store keep using `ip_address`, which
+     * is what the viewers and the other workers reach the node by. The panel's host must be on
+     * the tailnet too, or every node with a tailnet address becomes unreachable.
+     */
+    public function sshHost(): string
+    {
+        return $this->tailscale_ip ?: $this->ip_address;
     }
 
     /**
