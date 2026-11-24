@@ -19,6 +19,10 @@ describe('reconnect flags', function () {
 
         expect($command)->toContain('-reconnect 1')
             ->and($command)->toContain('-reconnect_on_network_error 1')
+            // A connection the peer never closes (a store gone behind a tunnel) blocked ffmpeg
+            // forever, past the job's timeout and through its SIGTERM; bounded, it reconnects.
+            ->and($command)->toContain('-rw_timeout 30000000')
+            ->and(strpos($command, '-rw_timeout'))->toBeLessThan(strpos($command, '-i '))
             // Before -i, or ffmpeg applies them to nothing.
             ->and(strpos($command, '-reconnect 1'))->toBeLessThan(strpos($command, '-i '));
     });

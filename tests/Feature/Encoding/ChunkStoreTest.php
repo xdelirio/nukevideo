@@ -146,6 +146,14 @@ describe('the deploy', function () {
             ->and($script)->not->toContain('-p 9000:9000');
     });
 
+    it('gives the store read permits for every encode in the fleet', function () {
+        // At RustFS's default of 64, three workers' encodes queued for a permit: 2-5 s to the
+        // first byte of every GET, and the nodes idle at 40% CPU waiting on their sources.
+        $script = app(NodeService::class)->buildDeployScript(storeNode());
+
+        expect($script)->toContain('RUSTFS_OBJECT_MAX_CONCURRENT_DISK_READS=512');
+    });
+
     it('leaves a running store alone unless what it runs with changed', function () {
         // Recreating it on every deploy of its worker cut every other worker's transfers for a
         // few seconds, mid fleet deploy, for nothing.
