@@ -226,6 +226,12 @@ name: string | null,
 forced: boolean,
 hearingImpaired: boolean,
 };
+namespace ActivityLog {
+export type IndexActivityLogData = {
+event: string | null,
+video: string | null,
+};
+}
 namespace Analytics {
 export type AnalyticsCardData = {
 key: string,

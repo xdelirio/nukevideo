@@ -6,8 +6,11 @@ class ActivityLogService {
 
   constructor(private api = apiClient) {}
 
-  async index(page = 1): Promise<Pagination<App.Data.ActivityLogData>> {
-    const res = await this.api.get(this.BASE_PATH, { params: { page } })
+  async index(
+    page = 1,
+    filters: Partial<App.Data.ActivityLog.IndexActivityLogData> = {},
+  ): Promise<Pagination<App.Data.ActivityLogData>> {
+    const res = await this.api.get(this.BASE_PATH, { params: { page, ...filters } })
     return res.data
   }
 }

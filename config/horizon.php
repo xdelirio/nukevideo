@@ -63,7 +63,7 @@ $heavyWorker = [
 ];
 
 // Dedicated orchestration supervisor: the light per-video jobs that aren't chunk transcode
-// (source download/probe/segment, thumbnail, storyboard, sidecar, cleanup). Runs on every
+// (source download/probe/segment, thumbnail, sidecar, cleanup). Runs on every
 // worker so it always has a consumer, independent of which hardware queues exist in the fleet.
 // Its size is how many videos a node prepares at once, and preparing (download, per-title probes)
 // is most of a video's time on the node: keep it in step with the API's VIDEOS_PER_NODE.

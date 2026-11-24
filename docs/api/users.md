@@ -94,7 +94,20 @@ GET /api/activity-log
 
 This returns the events recorded against the project's videos (queued for processing, failures,
 and so on), newest first, 20 per page (`?page=`). An admin also sees the node operations, which
-belong to no project:
+belong to no project.
+
+Two filters narrow it, alone or together:
+
+| Parameter | Description |
+|-----------|-------------|
+| `event` | Only this event, as recorded: `video_failed`, `thumbnail_failed`, `storyboard_failed`… |
+| `video` | Only the events of this video, by its ULID. Node operations are left out, being no video's. |
+
+Why a video failed is recorded on its `video_failed` event, in `properties.reason`, so
+`?event=video_failed&video={ulid}` answers that for one video. URLs in a reason are replaced with
+`<url>`, and a failed command is reduced to its program name.
+
+A response:
 
 ```json
 {

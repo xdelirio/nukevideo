@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import Spinner from '@/components/ui/spinner/Spinner.vue'
 import {
   Table,
@@ -35,11 +38,28 @@ const logs = ref<ResPagination<ActivityLog>>({ currentPage: 1, data: [], perPage
 const loading = ref(true)
 const currentPage = ref(1)
 
+// Kept in the URL, so a link can open the log already narrowed to one video's failure.
+const route = useRoute()
+const router = useRouter()
+const ALL_EVENTS = 'all'
+const eventFilter = ref(typeof route.query.event === 'string' ? route.query.event : ALL_EVENTS)
+const videoFilter = ref(typeof route.query.video === 'string' ? route.query.video : '')
+
+const filters = () => ({
+  ...(eventFilter.value !== ALL_EVENTS ? { event: eventFilter.value } : {}),
+  ...(videoFilter.value.trim() ? { video: videoFilter.value.trim() } : {}),
+})
+
+const applyFilters = () => {
+  router.replace({ query: filters() })
+  fetchLogs(1)
+}
+
 const fetchLogs = async (page = 1) => {
   try {
     loading.value = true
     currentPage.value = page
-    logs.value = await ActivityLogService.index(page)
+    logs.value = await ActivityLogService.index(page, filters())
   } catch (error) {
     console.error('Error fetching activity logs:', error)
   } finally {
@@ -89,6 +109,19 @@ onMounted(() => {
       <p class="text-muted-foreground">Recent activity and events for your videos.</p>
     </div>
 
+    <form class="flex flex-wrap items-center gap-2" @submit.prevent="applyFilters">
+      <Select v-model="eventFilter" @update:model-value="applyFilters">
+        <SelectTrigger class="w-56">
+          <SelectValue placeholder="Every event" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem :value="ALL_EVENTS">Every event</SelectItem>
+          <SelectItem v-for="(config, event) in eventConfig" :key="event" :value="event">{{ config.label }}</SelectItem>
+        </SelectContent>
+      </Select>
+      <Input v-model="videoFilter" placeholder="Video ULID" class="w-72 font-mono" @change="applyFilters" />
+    </form>
+
     <div class="overflow-hidden rounded-lg border">
       <Table>
         <TableHeader class="bg-muted">
@@ -107,7 +140,7 @@ onMounted(() => {
           </TableRow>
           <TableRow v-else-if="logs.data.length === 0">
             <TableCell colspan="3" class="text-center text-muted-foreground">
-              No activity yet.
+              {{ eventFilter !== ALL_EVENTS || videoFilter ? 'No activity matches these filters.' : 'No activity yet.' }}
             </TableCell>
           </TableRow>
           <TableRow v-else v-for="log in logs.data" :key="log.id">
@@ -122,9 +155,12 @@ onMounted(() => {
             <TableCell>
               <div class="space-y-1">
                 <p class="text-sm">{{ log.description }}</p>
-                <p v-if="log.properties?.error" class="text-xs text-destructive font-mono truncate max-w-md" :title="String(log.properties.error)">
-                  {{ log.properties.error }}
-                </p>
+                <!-- A failed video records `reason`, the rest record `error`: only `error` was shown,
+                     so why a video failed was in the log and never on screen. -->
+                <p
+                  v-if="log.properties?.error ?? log.properties?.reason"
+                  class="text-xs text-destructive font-mono whitespace-pre-wrap break-all max-w-xl"
+                >{{ log.properties?.error ?? log.properties?.reason }}</p>
               </div>
             </TableCell>
             <TableCell class="text-sm text-muted-foreground whitespace-nowrap">

@@ -431,10 +431,26 @@ class Video extends Model
         }
     }
 
-    /** ffmpeg pours its whole stderr into an exception; keep the head, where the cause is. */
+    /**
+     * A failure as the panel, the webhook and anyone holding a project key will read it. ffmpeg
+     * pours its whole stderr into an exception; keep the head, where the cause is.
+     *
+     * Except that a process exception (Symfony's or Laravel's) opens with the whole command line:
+     * five kilobytes of flags for a sidecar pass, so the head kept was all command and the part
+     * saying what happened ("exceeded the timeout of 1679 seconds") was cut. The command is
+     * reduced to its program. URLs are replaced: a presigned one names the internal store and the
+     * access key id.
+     */
     public static function trimReason(?string $reason): ?string
     {
         $reason = trim((string) $reason);
+
+        $reason = (string) preg_replace(
+            '/^The (process|command) "(\S+).*?" (exceeded the (?:idle )?timeout of [\d.]+ seconds\.|failed\.)/s',
+            'The $1 "$2" $3',
+            $reason,
+        );
+        $reason = (string) preg_replace('#[a-z][a-z0-9+.-]*://\S+#i', '<url>', $reason);
 
         return $reason === '' ? null : Str::limit($reason, 1000);
     }
