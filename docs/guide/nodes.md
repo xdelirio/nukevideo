@@ -43,6 +43,25 @@ The store holds the videos in flight, so it is not meant to move: change the add
 video processing, then redeploy every worker. Deleting the node that runs it clears the address;
 the next worker created claims it, or set it by hand.
 
+### Workers away from the store
+
+A worker that is not on the store's private network — a machine at home, say, behind CGNAT — can
+still encode chunks, which is the light part of the traffic: each one reads a window of the source
+and writes back a few MB. The rest is not light. A preparation mirrors the whole source to the
+store over that node's uplink, every sidecar pass reads it end to end again, and packaging pulls
+every chunk and pushes the package to the primary bucket. Set `CHUNKS_ONLY=true` in that node's
+environment and it drains only its encode queues, leaving preparation and packaging to the workers
+next to the store ([Configuration](./configuration.md)).
+
+It still has to reach the store at the fleet's address, and its deploy checks that it does. Over
+Tailscale, without publishing the store anywhere new: on the worker that runs it,
+`tailscale set --advertise-routes=<store-ip>/32` and approve the route in the Tailscale admin
+console; on the remote node, `tailscale set --accept-routes`. The address stays the same for every
+worker, and the traffic is encrypted, which the store's own plain HTTP is not. Behind a strict
+NAT Tailscale may fall back to its relays, which are too slow to keep encoders fed:
+`tailscale ping <store-worker>` from the remote node should answer `via <ip>:<port>`, not
+`via DERP`.
+
 ### Job Distribution
 
 Workers are not assigned videos: they pull. `videos:dispatch` (every five seconds on the API host) admits pending videos while each hardware family — CPU, Intel, NVIDIA — has fewer videos in flight than `VIDEOS_PER_NODE` (five by default) times its active worker nodes, plus one, and a video's chunk jobs then go to its family's queue, drained by every worker of that family. GPU nodes do not drain the CPU queue. Software renditions above 1080p go to a queue of their own, `video-processing-heavy`, which every CPU worker drains with one or two processes that wait for free memory before encoding. Admission pauses for ten minutes whenever a job runs out of attempts against the primary store, so an outage there costs a wait rather than videos. How many chunks a node encodes at once is sized from its CPU cores and RAM when the container starts; `VIDEO_WORKER_PROCESSES` and `HEAVY_WORKER_PROCESSES` (CPU) or `GPU_WORKER_PROCESSES` in the node's environment override it.

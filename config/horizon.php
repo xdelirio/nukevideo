@@ -13,13 +13,24 @@ use App\Support\Gpu;
 // One hardware transcode supervisor per node: CPU nodes pull `video-processing`, GPU nodes
 // (NODE_ACCEL set) pull ONLY their `video-processing-{accel}` queue — never CPU transcode.
 // Orchestration (the light per-video prep/thumbnail/storyboard/sidecar/cleanup jobs) gets its
-// own queue that EVERY worker drains regardless of hardware, so it's never stranded when the
-// fleet has no CPU node. Packaging likewise gets its own supervisor so the light finalization
+// own queue that every worker drains regardless of hardware (CHUNKS_ONLY ones excepted), so it's
+// never stranded when the fleet has no CPU node. Packaging likewise gets its own supervisor so the light finalization
 // step never starves behind the CPU-bound transcode backlog. Opt-out per node with
 // DISABLE_PACKAGING (default: every worker packages) — the safe failure mode is "packages on
 // too many nodes", not "packages on none".
 $isWorker = env('NODE_TYPE') === 'worker';
-$runsPackaging = $isWorker && ! filter_var(env('DISABLE_PACKAGING', false), FILTER_VALIDATE_BOOL);
+
+// CHUNKS_ONLY: a worker that only encodes chunks — no orchestration, no packaging. For a node far
+// from the chunk store (a home box behind CGNAT): a chunk reads one window of the mirrored source
+// and writes back a few MB, but a preparation mirrors the WHOLE source to the store over that
+// node's uplink, every sidecar pass reads it end to end again, and packaging pulls every chunk
+// and pushes the package to primary S3. One variable rather than DISABLE_PACKAGING plus an
+// orchestration count of zero, so the node can never be left half-configured: preparing videos
+// it cannot package nearby is exactly the case this exists to avoid. The other workers drain
+// what it skips, so leave at least one without it, as with DISABLE_PACKAGING.
+$chunksOnly = $isWorker && filter_var(env('CHUNKS_ONLY', false), FILTER_VALIDATE_BOOL);
+$runsOrchestration = $isWorker && ! $chunksOnly;
+$runsPackaging = $runsOrchestration && ! filter_var(env('DISABLE_PACKAGING', false), FILTER_VALIDATE_BOOL);
 
 // Pools are pinned (minProcesses = maxProcesses). `balance => none` does not mean a fixed pool:
 // Horizon still scales a lone pool between 1 and its maximum by the length of its ready queue, one
@@ -64,7 +75,7 @@ $heavyWorker = [
 
 // Dedicated orchestration supervisor: the light per-video jobs that aren't chunk transcode
 // (source download/probe/segment, thumbnail, sidecar, cleanup). Runs on every
-// worker so it always has a consumer, independent of which hardware queues exist in the fleet.
+// worker but a CHUNKS_ONLY one, so it always has a consumer, independent of which hardware queues exist in the fleet.
 // Its size is how many videos a node prepares at once, and preparing (download, per-title probes)
 // is most of a video's time on the node: keep it in step with the API's VIDEOS_PER_NODE.
 $orchestrationProcesses = max(1, (int) env('ORCHESTRATION_WORKER_PROCESSES', 5));
@@ -161,8 +172,10 @@ $workerEnv = $isGpu
     ? ['gpu-worker' => []]
     : ['video-worker' => [], 'heavy-worker' => []];
 
-$workerDefaults['orchestration-worker'] = $orchestrationWorker;
-$workerEnv['orchestration-worker'] = [];
+if ($runsOrchestration) {
+    $workerDefaults['orchestration-worker'] = $orchestrationWorker;
+    $workerEnv['orchestration-worker'] = [];
+}
 
 if ($runsPackaging) {
     $workerDefaults['packaging-worker'] = $packagingWorker;
