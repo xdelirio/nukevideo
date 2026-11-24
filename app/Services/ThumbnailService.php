@@ -32,7 +32,8 @@ class ThumbnailService
             '-ss', (string) $timeInSeconds,
             '-i', $inputPath,
             '-frames:v', '1',
-            '-vf', 'scale=640:-2',
+            // Up to full HD for TVs, never upscaled: a smaller source keeps its own width.
+            '-vf', "scale='min(1920,iw)':-2",
             '-q:v', '2',
             $outputPath,
         ]);
@@ -73,9 +74,10 @@ class ThumbnailService
 
         Scratch::ensureDirectory(dirname($outputPattern));
 
-        // bilinear, not lanczos: at ~320px the quality gap is imperceptible and far cheaper.
+        // lanczos: only keyframes are decoded, so a few hundred frames are scaled per video and
+        // the sharper filter costs nothing measurable, while the thumbs are large enough for a TV.
         $filter = sprintf(
-            'fps=1/%d,scale=%d:%d:flags=bilinear,tile=%dx%d',
+            'fps=1/%d,scale=%d:%d:flags=lanczos,tile=%dx%d',
             $interval,
             $thumbWidth,
             $thumbHeight,

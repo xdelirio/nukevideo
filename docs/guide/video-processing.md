@@ -14,13 +14,12 @@ OnVideoUploaded — creates the video (PENDING) and its `original` stream
        └── PrepareVideoJob (orchestration queue)
             ├── download source once, mirror it to the chunk store (DOWNLOADING → RUNNING)
             ├── probe → outputs + streams, per-title CRF / bitrate probe / preflight
-            ├── ExtractThumbnailJob        ┐
-            ├── GenerateVideoStoryboard    │ in parallel with the encode
+            ├── ExtractThumbnailJob        ┐ in parallel with the encode
             ├── EncodeSidecarTracksJob     ┘ (audio + subtitles, one pass, never chunked)
             └── Bus::batch per hardware queue — one ProcessChunkJob per (window × rendition)
                  └── last batch's .then() (UPLOADING)
                       └── PackageVideoJob (packaging queue)
-                           concat chunks → shaka-packager → subtitles → s5cmd sync to S3
+                           concat chunks → storyboard → shaka-packager → subtitles → s5cmd sync to S3
                            └── every output settles → video COMPLETED / FAILED
 ```
 
@@ -111,17 +110,20 @@ source, never chunked: per-chunk audio concatenation corrupts gapless codecs suc
 
 ### 6. Extract Thumbnail
 
-A thumbnail is extracted at 30% of the video duration and uploaded to S3. A failure is logged and
-never fails the video.
+A thumbnail is extracted at 30% of the video duration, up to 1920 px wide (never upscaled), and
+uploaded to S3. A failure is logged and never fails the video.
 
 ### 7. Generate Storyboard
 
-Sprite sheets are created for seek preview:
-- Frames extracted at 10-second intervals, 320 px wide.
-- Arranged in a 10×10 grid (100 thumbnails per sprite).
+Sprite sheets are created for seek preview, during packaging, from a rendition already concatenated
+on the packaging worker's disk rather than from the source. That rendition is the smallest one at
+least 640 px wide, so nothing is upscaled and nothing larger is decoded than the thumbnails show.
+- Frames extracted at 10-second intervals, 640 px wide, the trick-play size for a full HD screen.
+- Six columns per sheet, and as many rows as keep the sheet within 4096 px (ten for 16:9), the
+  largest texture many TV browsers accept.
 - A WebVTT file is generated with coordinates for each frame.
 
-Like the thumbnail, a failure never fails the video.
+Like the thumbnail, a failure never fails the video: the storyboard is then simply absent.
 
 ### 8. Package & Settle
 
