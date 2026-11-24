@@ -936,7 +936,7 @@ class NodeService
     private function ssh(Node $node, string $command, int $timeout = 30, ?string $input = null, ?\Closure $onOutput = null): string
     {
         return $this->ssh->run(
-            ip: $node->ip_address,
+            ip: $node->sshHost(),
             user: $node->user,
             privateKey: $this->sshKeys->privateKey(),
             command: $command,

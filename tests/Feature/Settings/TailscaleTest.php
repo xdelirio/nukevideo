@@ -68,6 +68,20 @@ describe('the auth key', function () {
     });
 });
 
+describe('how the panel reaches a node', function () {
+    it('opens SSH over the tailnet once the node has an address there, and the public IP before', function () {
+        $worker = tailscaleWorker(['ip_address' => '203.0.113.7']);
+
+        expect($worker->sshHost())->toBe('203.0.113.7');
+
+        $worker->forceFill(['tailscale_ip' => '100.64.0.7'])->save();
+
+        expect($worker->fresh()->sshHost())->toBe('100.64.0.7')
+            // The public address is kept: it is still what DNS and the chunk store use.
+            ->and($worker->fresh()->ip_address)->toBe('203.0.113.7');
+    });
+});
+
 describe('what a worker is told', function () {
     it('gets the key and a hostname named after it, so it can join', function () {
         TailscaleSettings::fake(['auth_key' => 'tskey-auth-abc123']);

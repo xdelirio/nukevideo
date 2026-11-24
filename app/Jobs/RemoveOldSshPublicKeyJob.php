@@ -48,7 +48,7 @@ class RemoveOldSshPublicKeyJob implements ShouldQueue
 
         foreach (Node::orderBy('id')->get() as $node) {
             try {
-                $ssh->run($node->ip_address, $node->user, $privateKey, SshKeyService::removeCommand($this->oldPublicKey), 30);
+                $ssh->run($node->sshHost(), $node->user, $privateKey, SshKeyService::removeCommand($this->oldPublicKey), 30);
             } catch (\Throwable $e) {
                 Log::warning("Old SSH public key left on node {$node->id}: {$e->getMessage()}");
             }

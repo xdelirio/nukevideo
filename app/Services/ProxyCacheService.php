@@ -108,7 +108,7 @@ class ProxyCacheService
     public function inventory(Node $node): array
     {
         $output = $this->ssh->run(
-            ip: $node->ip_address,
+            ip: $node->sshHost(),
             user: $node->user,
             privateKey: $this->sshKeys->privateKey(),
             command: 'bash -s',

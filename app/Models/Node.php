@@ -63,6 +63,18 @@ class Node extends Model
     }
 
     /**
+     * The address the panel opens SSH to: the tailnet one once the node has joined, the public one
+     * until then. Every SSH call goes through here, so a worker on the tailnet can close port 22
+     * to the internet. Only SSH: the DNS record and the chunk store keep using `ip_address`, which
+     * is what the viewers and the other workers reach the node by. The panel's host must be on
+     * the tailnet too, or every node with a tailnet address becomes unreachable.
+     */
+    public function sshHost(): string
+    {
+        return $this->tailscale_ip ?: $this->ip_address;
+    }
+
+    /**
      * The scheme every URL to a proxy node is built with: the link the API mints, the URL the
      * health probe fetches, the `VOD_BASE_URL` a node is deployed with and the Traefik router in
      * front of the edge ({@see NodeService}) all have to agree on this one place.
