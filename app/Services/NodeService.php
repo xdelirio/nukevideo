@@ -10,9 +10,11 @@ use App\Models\Node;
 use App\Settings\CdnSettings;
 use App\Settings\EdgeS3Settings;
 use App\Settings\NodeSettings;
+use App\Settings\TailscaleSettings;
 use App\Support\AllowedDomains;
 use App\Support\Cpu;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class NodeService
 {
@@ -23,6 +25,7 @@ class NodeService
         private CdnSettings $cdnSettings,
         private CloudflareDns $cloudflare,
         private EdgeS3Settings $edgeS3,
+        private TailscaleSettings $tailscale,
     ) {}
 
     public function index(): array
@@ -360,6 +363,33 @@ class NodeService
         // and the script reached its last line. Without this a redeployed proxy stayed out of
         // rotation until the next probe cycle confirmed it.
         $node->markHealthy();
+
+        // Only when this deploy asked the node to join: without a key there is nothing to read, and
+        // the extra round trip would be paid by every worker for an address it does not have.
+        if ($node->type === NodeType::WORKER && $this->tailscale->authKey() !== null) {
+            $this->recordTailscaleIp($node);
+        }
+    }
+
+    /**
+     * Reads the node's address on the tailnet back after its deploy, once tailscaled has joined
+     * it. Best effort: the deploy already succeeded, and a node that is not on the tailnet (no key
+     * stored, or a failed join) simply records none. `sudo -n` is the fallback for a deploy user
+     * that cannot ask the daemon itself; a password prompt would hang the call, so it is refused.
+     */
+    private function recordTailscaleIp(Node $node): void
+    {
+        try {
+            $output = $this->ssh($node, 'tailscale ip -4 2>/dev/null || sudo -n tailscale ip -4 2>/dev/null || true', 30);
+        } catch (\Throwable $e) {
+            Log::warning('Could not read the Tailscale address of a worker after its deploy', ['node' => $node->id, 'error' => $e->getMessage()]);
+
+            return;
+        }
+
+        $ip = strtok(trim($output), "\n") ?: null;
+
+        $node->forceFill(['tailscale_ip' => filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ? $ip : null])->save();
     }
 
     /**
@@ -436,7 +466,9 @@ class NodeService
 
         // sudo.sh first: everything after it leans on $SUDO having been settled or the run aborted.
         // packages.sh next, for the same reason: it is how every later section installs a tool.
-        $sections = ['sudo', 'packages', 'common', $node->type === NodeType::PROXY ? 'cache-disks' : null, $type, 'vector'];
+        // Tailscale comes up before the worker's own section, so the node is on the tailnet by the
+        // time its chunk store address is checked.
+        $sections = ['sudo', 'packages', 'common', $node->type === NodeType::PROXY ? 'cache-disks' : null, $node->type === NodeType::WORKER ? 'tailscale' : null, $type, 'vector'];
 
         return $header."\n".implode("\n", array_map(
             fn ($section) => self::deployScript($section),
@@ -503,6 +535,9 @@ class NodeService
         return [
             'NODE_ACCEL' => $node->accel?->value ?? '',
             'RUN_ARGS' => $runArgs,
+            // Null leaves it unset, which tailscale.sh reads as "install, do not join".
+            'TAILSCALE_AUTH_KEY' => $this->tailscale->authKey(),
+            'TAILSCALE_HOSTNAME' => Str::slug($node->name),
             ...$this->chunkStoreVars($node),
         ];
     }

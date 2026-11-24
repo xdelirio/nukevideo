@@ -24,6 +24,7 @@ class Node extends Model
         'is_active',
         'is_draining',
         // Written by the probe and the deploy, never by the API: the Data objects do not expose them.
+        'tailscale_ip',
         'health_failures',
         'last_healthy_at',
         'log',

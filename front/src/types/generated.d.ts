@@ -27,6 +27,7 @@ sshPublicKey: string | null,
 sshFingerprint: string | null,
 cloudflareConfigured: boolean,
 cloudflareProxied: boolean,
+tailscaleConfigured: boolean,
 };
 export type CacheDiskData = {
 device: string,
@@ -67,6 +68,7 @@ type: App.Enums.NodeType,
 accel: App.Enums.NodeAccel | null,
 hostname: string | null,
 cloudflareProxied: boolean | null,
+tailscaleIp: string | null,
 isActive: boolean,
 isDraining: boolean,
 isHealthy: boolean,
@@ -388,6 +390,9 @@ proxied: boolean,
 };
 export type UpdateSshKeyData = {
 privateKey: string | null,
+};
+export type UpdateTailscaleData = {
+authKey: string,
 };
 }
 namespace Auth {

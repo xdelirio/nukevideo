@@ -209,6 +209,7 @@ const statusDot = (node: App.Data.NodeData) => {
                   <span v-else-if="node.isActive && !node.isHealthy" class="ml-1 text-xs font-normal text-red-500">unhealthy</span>
                 </span>
                 <span class="text-xs text-muted-foreground">{{ node.ipAddress }}</span>
+                <span v-if="node.tailscaleIp" class="text-xs text-muted-foreground" title="Address on the Tailscale network">· tailscale {{ node.tailscaleIp }}</span>
               </div>
             </div>
           </TableCell>
