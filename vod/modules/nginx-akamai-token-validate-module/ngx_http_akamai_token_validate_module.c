@@ -5,6 +5,7 @@
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 #include <openssl/buffer.h>
+#include <openssl/crypto.h>
 
 #define TIME_CHECK_MARGIN (10)		// a margin around the token start/end time to compensate for clock differences
 
@@ -303,8 +304,10 @@ ngx_http_akamai_token_validate(ngx_http_request_t *r, ngx_str_t* token, ngx_str_
 #endif
 	hash_hex_len = ngx_hex_dump(hash_hex, hash, hash_len) - hash_hex;
 	
+	// NukeVideo: constant-time comparison (CRYPTO_memcmp), not ngx_memcmp, so the time a
+	// refusal takes says nothing about how many leading characters of a forged hmac were right.
 	if (hash_hex_len != parsed_token.hmac.len ||
-		ngx_memcmp(hash_hex, parsed_token.hmac.data, hash_hex_len) != 0)
+		CRYPTO_memcmp(hash_hex, parsed_token.hmac.data, hash_hex_len) != 0)
 	{
 		return 0;
 	}

@@ -13,8 +13,8 @@ November 2026, and no maintained upstream remains. The edge needs all three:
 ## Provenance
 
 Each directory is the module's tree at the commit below, minus its Travis CI files (`.travis.yml`,
-`travis_build.sh`). Nothing else is changed. The ids were checked against the Software Heritage
-archive of the original Kaltura repositories
+`travis_build.sh`), and with the changes listed under [Modifications](#modifications). The ids
+were checked against the Software Heritage archive of the original Kaltura repositories
 (`archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/kaltura/<name>`):
 
 | Module | Commit | What it is |
@@ -27,7 +27,16 @@ They were previously fetched from forks at the same commits (`github.com/xdeliri
 the Dockerfiles of releases up to v2.0.39 still download.
 
 To check a tree against its commit, download that commit's archive from Software Heritage or the
-fork, drop the two CI files, and `diff -r` it with the directory here.
+fork, drop the two CI files, and `diff -r` it with the directory here: the only differences are the
+modifications below.
+
+## Modifications
+
+Every change is marked in the source with a `NukeVideo:` comment.
+
+| Date | Module | Change |
+|---|---|---|
+| 2026-11-27 | `nginx-akamai-token-validate-module` | The token's hmac is compared with `CRYPTO_memcmp` (constant time) instead of `ngx_memcmp`, which returned as soon as a character differed and so let response timing reveal how much of a forged hmac was right. |
 
 ## License
 
