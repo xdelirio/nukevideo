@@ -2,8 +2,15 @@ import { ApiException } from '@/exceptions/ApiException'
 import { ValidationException } from '@/exceptions/ValidationException'
 import axios, { type AxiosInstance } from 'axios'
 
+/**
+ * Where the API lives. The release image serves the panel from the API's own origin, so by default
+ * that is `/api` on the page's host — absolute, because Uppy resolves its endpoint itself. A panel
+ * hosted elsewhere (Cloudflare Pages, say) is built with `VITE_URL_API` pointing at the API.
+ */
+export const API_URL: string = import.meta.env.VITE_URL_API || `${window.location.origin}/api`
+
 const apiClient: AxiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_URL_API,
+  baseURL: API_URL,
   withCredentials: true,
   withXSRFToken: true,
   headers: {

@@ -126,7 +126,7 @@ Then open:
 
 Production images are built and pushed to Docker Hub on every `v*` git tag (`chikenare/nukevideo-api`, `chikenare/nukevideo-proxy`), for `linux/amd64` and `linux/arm64`.
 
-`compose.prod.yml` pulls those images and runs the core stack: API, Horizon, scheduler, MariaDB and Redis.
+`compose.prod.yml` pulls those images and runs the core stack: API, Horizon, scheduler, MariaDB and Redis. The API image also serves the admin panel at the root of `APP_URL`.
 
 ```bash
 cp .env.example .env      # APP_ENV=production, APP_DEBUG=false, APP_KEY, DB/Redis, S3, secrets...
@@ -134,13 +134,13 @@ TAG=vX.Y.Z docker compose -f compose.prod.yml up -d          # migrations run on
 docker compose -f compose.prod.yml exec nukevideo-api php artisan users:create-admin
 ```
 
-The admin panel (`front/`) is a static SPA, built against your API URL and served from any static host. Then, from the panel:
+Open `APP_URL`, sign in, and from the panel:
 
 1. **Add storage** — point NukeVideo at your S3 bucket and configure the upload webhook.
 2. **Add worker nodes** — register a server with an SSH key and deploy the worker image; workers pull encoding jobs from the queue.
 3. **Add proxy nodes** — deployed over SSH like workers, they deliver the packaged video (see below).
 
-The [production section of the guide](docs/guide/getting-started.md#production) walks through the `.env` checklist (HTTPS cookies, the panel's domain, secrets) and building the panel; [Configuration](docs/guide/configuration.md) is the full environment reference.
+The [production section of the guide](docs/guide/getting-started.md#production) walks through the `.env` checklist (HTTPS cookies, secrets) and hosting the panel on its own domain if you prefer; [Configuration](docs/guide/configuration.md) is the full environment reference.
 
 ## Delivery: proxy nodes
 

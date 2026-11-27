@@ -1,10 +1,12 @@
 <?php
 
+use App\Http\Controllers\PanelController;
 use App\Http\Middleware\DenyProjectKey;
 use App\Http\Middleware\ResolveProject;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Support\Facades\Route;
 use Sentry\Laravel\Integration;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -13,6 +15,8 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         channels: __DIR__.'/../routes/channels.php',
         health: '/up',
+        // Last, so it only answers what no route above matched (see PanelController).
+        then: fn () => Route::fallback(PanelController::class),
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // No `throttleApi()`: it would also cover the S3 multipart routes, which sign one request

@@ -30,9 +30,15 @@ Thumbs.db
 /vendor
 /node_modules
 
-# SPA: the api and proxy images never serve it, and shipping it in the context invalidates
-# api-build's `COPY . .` layer on every front-only commit. front-dev bind-mounts it at runtime.
-/front
+# The panel's sources are in the context for the front-build stage (the API image serves the
+# build); its dependencies, build output and local env are not.
+/front/node_modules
+/front/dist
+/front/.env
+/front/.env.*
+/front/.eslintcache
+/front/*.tsbuildinfo
+/front/coverage
 
 # Storage & cache. storage/app keeps its two directories and nothing in them: a developer's local
 # files there (scratch exports, benchmark dumps) must not ride into a published image.
