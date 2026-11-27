@@ -13,7 +13,9 @@ November 2026, and no maintained upstream remains. The edge needs all three:
 ## Provenance
 
 Each directory is the module's tree at the commit below, minus its Travis CI files (`.travis.yml`,
-`travis_build.sh`), and with the changes listed under [Modifications](#modifications). The ids
+`travis_build.sh`) and `nginx-secure-token-module/scripts/` (example URL-encryption scripts the edge
+does not use, which the repository's PHP linter would otherwise check), and with the changes listed
+under [Modifications](#modifications). The ids
 were checked against the Software Heritage archive of the original Kaltura repositories
 (`archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/kaltura/<name>`):
 
@@ -27,7 +29,7 @@ They were previously fetched from forks at the same commits (`github.com/xdeliri
 the Dockerfiles of releases up to v2.0.39 still download.
 
 To check a tree against its commit, download that commit's archive from Software Heritage or the
-fork, drop the two CI files, and `diff -r` it with the directory here: the only differences are the
+fork, drop the files above, and `diff -r` it with the directory here: the only differences are the
 modifications below.
 
 ## Modifications
