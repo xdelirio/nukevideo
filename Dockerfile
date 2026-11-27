@@ -150,47 +150,30 @@ USER www-data
 FROM alpine:3.20 AS proxy-builder
 
 ENV NGINX_VERSION=1.30.6
-# Kaltura deleted its nginx module repositories from GitHub in November 2026, with no notice and no
-# advisory, and every build that was not served from cache started failing on a 404. Until the edge
-# stops needing them, the three modules come from this project's own forks, so that nobody else can
-# take them away again — and pinned by commit, never by tag or branch: a git commit id is a hash of
-# its content, so no copy can hand over anything but the code Kaltura published under it. Each id
-# was checked against the Software Heritage archive of the ORIGINAL repository
-# (archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/kaltura/<name>):
-#   aws-auth      dbbac97 is what the tag 1.1 pointed to
-#   secure-token  18b97a8 is what the tag 1.5 pointed to
-#   akamai        818d94a is the same master commit as before
-ENV NGINX_AWS_AUTH_REPO=xdelirio/nginx-aws-auth-module
-ENV NGINX_AWS_AUTH_VERSION=dbbac974f0699328a63f497cd911a4f991faed9b
-# A commit, not the 1.1 tag: 1.1 (2017) parses no `ip` field, and the check that refuses a token
-# from any other address than the one it names only exists on master (kaltura PR #22, 2021), which
-# was never tagged. The panel's "bind to the viewer's IP" setting relies on it.
-ENV NGINX_AKAMAI_TOKEN_VALIDATE_REPO=xdelirio/nginx-akamai-token-validate-module
-ENV NGINX_AKAMAI_TOKEN_VALIDATE_VERSION=818d94a712e6bbd32d9d086d2c96ccd98f79e438
-ENV NGINX_SECURE_TOKEN_REPO=xdelirio/nginx-secure-token-module
-ENV NGINX_SECURE_TOKEN_VERSION=18b97a82878e09fef24fe4f6a446eed01dbe28d7
+# The release tarball's sha256: a download that does not match fails the build.
+ENV NGINX_SHA256=3cf46f5ed7504d460125866b7bea99fb357f31d887e2e63b35503310e9b8b6c8
 
 RUN apk add --no-cache \
     wget ca-certificates build-base zlib-dev openssl-dev \
     pcre-dev libxml2-dev libxslt-dev linux-headers libaio-dev
 
 RUN wget https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz -O nginx.tar.gz && \
-    tar zxf nginx.tar.gz && \
-    wget https://github.com/${NGINX_AWS_AUTH_REPO}/archive/${NGINX_AWS_AUTH_VERSION}.tar.gz -O aws.tar.gz && \
-    tar zxf aws.tar.gz && \
-    wget https://github.com/${NGINX_AKAMAI_TOKEN_VALIDATE_REPO}/archive/${NGINX_AKAMAI_TOKEN_VALIDATE_VERSION}.tar.gz -O natvm.tar.gz && \
-    tar zxf natvm.tar.gz && \
-    wget https://github.com/${NGINX_SECURE_TOKEN_REPO}/archive/${NGINX_SECURE_TOKEN_VERSION}.tar.gz -O nstm.tar.gz && \
-    tar zxf nstm.tar.gz
+    echo "${NGINX_SHA256}  nginx.tar.gz" | sha256sum -c - && \
+    tar zxf nginx.tar.gz
+
+# The three modules the edge needs (S3 signing, token validation, manifest token rewriting) are
+# vendored, unmodified, in vod/modules: their original repositories are gone. Provenance, the
+# commit each one is pinned to and their AGPL license are in vod/modules/README.md.
+COPY vod/modules /modules
 
 ARG TARGETARCH
 RUN if [ "$TARGETARCH" = "amd64" ]; then CC_OPT="-O3 -mpopcnt"; else CC_OPT="-O3"; fi && \
     cd nginx-${NGINX_VERSION} && \
     ./configure \
     --prefix=/usr/local/nginx \
-    --add-module=../nginx-aws-auth-module-${NGINX_AWS_AUTH_VERSION} \
-    --add-module=../nginx-akamai-token-validate-module-${NGINX_AKAMAI_TOKEN_VALIDATE_VERSION} \
-    --add-module=../nginx-secure-token-module-${NGINX_SECURE_TOKEN_VERSION} \
+    --add-module=/modules/nginx-aws-auth-module \
+    --add-module=/modules/nginx-akamai-token-validate-module \
+    --add-module=/modules/nginx-secure-token-module \
     --conf-path=/usr/local/nginx/conf/nginx.conf \
     --with-file-aio \
     --with-threads \
