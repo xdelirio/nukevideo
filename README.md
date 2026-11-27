@@ -85,19 +85,28 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
 
 ## Quick start (development)
 
-Everything runs in Docker. Dev uses `compose.yml` with Traefik and `*.nukevideo.localhost` domains (no `/etc/hosts` edits needed).
+Everything runs in Docker. Dev uses `compose.yml`, routed by a Traefik on an external `traefik` network under `*.nukevideo.localhost` (no `/etc/hosts` edits needed). `compose.yml` does not start Traefik itself; the second command below runs one, skip it if you already have one.
 
 ```bash
 git clone https://github.com/chikenare/nukevideo.git
 cd nukevideo
 
-docker network create traefik          # external network required by compose.yml
-cp .env.example .env
+docker network create traefik
+docker run -d --name traefik --restart unless-stopped --network traefik \
+  -p 80:80 -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  traefik:v3.6.25 --api.insecure=true --providers.docker=true \
+  --providers.docker.exposedbydefault=false --entrypoints.web.address=:80
 
+cp .env.example .env   # set REDIS_HOST=redis and a DB_PASSWORD, see the guide
+docker compose run --rm nukevideo-docs pnpm install
 docker compose up -d --build
+docker compose exec nukevideo-api composer install
 docker compose exec nukevideo-api php artisan key:generate
 docker compose exec nukevideo-api php artisan migrate --seed
+docker compose up -d   # the scheduler and Horizon exit on a fresh checkout; start them again
 ```
+
+The [Getting Started guide](docs/guide/getting-started.md) has the details, including the `.env` values for the bundled RustFS.
 
 Then open:
 
@@ -111,27 +120,27 @@ Then open:
 | RedisInsight | http://redis.nukevideo.localhost |
 | Traefik dashboard | http://localhost:8080 |
 
-**Default login:** `test@example.com` / `password`
+**Default login:** `test@example.com` / `password`, created by the seeder (development only; production uses `users:create-admin`).
 
 ## Production
 
-Production images are built and pushed to Docker Hub automatically on every `v*` git tag (`chikenare/nukevideo-api`, `chikenare/nukevideo-proxy`), for `linux/amd64` and `linux/arm64`.
+Production images are built and pushed to Docker Hub on every `v*` git tag (`chikenare/nukevideo-api`, `chikenare/nukevideo-proxy`), for `linux/amd64` and `linux/arm64`.
 
-The provided `docker-compose.yml` pulls those images and runs the core stack — API, Horizon, scheduler, MariaDB and Redis:
+`compose.prod.yml` pulls those images and runs the core stack: API, Horizon, scheduler, MariaDB and Redis.
 
 ```bash
-cp .env.example .env      # then set APP_KEY, DB/Redis creds, S3, WEBHOOK_SECRET, INTERNAL_API_SECRET...
-TAG=v1.0.0 docker compose up -d
-docker compose exec nukevideo-api php artisan migrate --force
+cp .env.example .env      # APP_ENV=production, APP_DEBUG=false, APP_KEY, DB/Redis, S3, secrets...
+TAG=vX.Y.Z docker compose -f compose.prod.yml up -d          # migrations run on start
+docker compose -f compose.prod.yml exec nukevideo-api php artisan users:create-admin
 ```
 
-Then, from the admin panel:
+The admin panel (`front/`) is a static SPA, built against your API URL and served from any static host. Then, from the panel:
 
 1. **Add storage** — point NukeVideo at your S3 bucket and configure the upload webhook.
 2. **Add worker nodes** — register a server with an SSH key and deploy the worker image; workers pull encoding jobs from the queue.
 3. **Add proxy nodes** — deployed over SSH like workers, they deliver the packaged video (see below).
 
-See the [Deployment guide](docs/guide/configuration.md) for the full environment reference.
+The [production section of the guide](docs/guide/getting-started.md#production) walks through the `.env` checklist (HTTPS cookies, the panel's domain, secrets) and building the panel; [Configuration](docs/guide/configuration.md) is the full environment reference.
 
 ## Delivery: proxy nodes
 
@@ -147,7 +156,11 @@ docker compose exec nukevideo-docs pnpm run docs:dev   # if not already up via c
 
 ## Contributing
 
-Issues and pull requests are welcome. Please open an issue to discuss substantial changes first. Follow the existing code style — PHP is formatted with Pint, and the frontend with ESLint + Prettier.
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Please open an issue to discuss substantial changes first.
+
+## Security
+
+Please do not report vulnerabilities in public issues. See [SECURITY.md](SECURITY.md) for how to report one privately.
 
 ## License
 

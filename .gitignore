@@ -26,3 +26,7 @@ Thumbs.db
 # Claude Code — personal overrides stay local, shared config is versioned
 /.claude/settings.local.json
 /.claude/worktrees
+
+# Working design specs and plans (superpowers): local notes about a deployment, not documentation
+/docs/superpowers
+/.superpowers

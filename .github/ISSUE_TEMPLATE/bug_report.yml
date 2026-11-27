@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems go to the private advisory form (see the issue chooser), not here.
+        Remove secrets, keys and internal addresses from anything you paste.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release tag of the images (`chikenare/nukevideo-api:vX.Y.Z`) or commit.
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - API / admin panel
+        - Encoding (workers, templates)
+        - Packaging / playback
+        - Proxy nodes / delivery
+        - Node deploy
+        - Analytics
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: For encoding problems, the template's `query` and the source's `ffprobe` output help most.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The video's failure reason, Horizon or container logs.
+      render: text

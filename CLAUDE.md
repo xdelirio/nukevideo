@@ -16,7 +16,7 @@ Monorepo: **Laravel 13 backend at the root**, **Vue 3 SPA in `front/`**, **ViteP
 ```
 .                       # Laravel 13 (PHP ^8.4) at the root
 ├── app/
-│   ├── Console/Commands/   # videos:dispatch, videos:reap, videos:prune, videos:retry
+│   ├── Console/Commands/   # videos:dispatch, videos:reap, videos:prune, videos:retry, users:create-admin
 │   ├── Data/               # Spatie Data — request and response DTOs (there are NO FormRequests)
 │   ├── DTOs/               # plain DTOs, not Spatie (UploadMeta, StorageWebhookData)
 │   ├── Enums/              # backed string enums
@@ -37,7 +37,8 @@ Monorepo: **Laravel 13 backend at the root**, **Vue 3 SPA in `front/`**, **ViteP
 ├── front/                  # Vue 3 + Vite SPA (its own pnpm project)
 ├── vod/                    # delivery edge nginx (secure_token)
 ├── vector/                 # Vector config: edge logs → API → usage_daily
-└── compose.yml             # the whole local stack
+├── compose.yml             # the whole local stack
+└── compose.prod.yml        # production core stack from the released images
 ```
 
 **There is no `app/Actions`, no `app/Http/Requests`, no `app/Policies` and no `routes/web.php`.**
