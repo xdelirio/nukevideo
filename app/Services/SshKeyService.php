@@ -7,8 +7,8 @@ use App\Data\AppSettings\SshKeyRotationData;
 use App\Jobs\RemoveOldSshPublicKeyJob;
 use App\Models\Node;
 use App\Settings\AppSettings;
-use phpseclib3\Crypt\EC;
-use phpseclib3\Crypt\PublicKeyLoader;
+use phpseclib4\Crypt\EC;
+use phpseclib4\Crypt\PublicKeyLoader;
 
 /**
  * The panel's one SSH key ({@see AppSettings}): what every connection to a node authenticates
