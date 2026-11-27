@@ -8,6 +8,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only by default; a job that needs more says so. Third-party actions are pinned by commit
+# (a tag can be moved to other code; a commit id cannot) and Dependabot keeps the pins current.
+permissions:
+  contents: read
+
 # Jobs skipped via `if:` still satisfy branch-protection required checks, unlike
 # workflow-level `paths:` filters, which leave them pending forever.
 jobs:
@@ -24,7 +29,7 @@ jobs:
     steps:
       - name: Detect changed areas
         id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         with:
           # "every": a file counts only when it matches ALL patterns of a filter,
           # which turns the negated backend list into an exclusion (backend lives
@@ -48,7 +53,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: "8.5"
           coverage: none
@@ -98,7 +103,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 11
 
