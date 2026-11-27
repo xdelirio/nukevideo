@@ -37,8 +37,8 @@ under `docs/api/`.
 
 ## Conventions
 
-[CLAUDE.md](CLAUDE.md) is the detailed guide to the codebase and its conventions (it is written for
-AI assistants, but it is the most complete description we have). The short version:
+[AGENTS.md](AGENTS.md) is the detailed guide to the codebase and its conventions (written for AI
+coding agents, but it is the most complete description we have). The short version:
 
 - **Backend:** business logic in `app/Services`, thin controllers, Spatie Data objects as the
   validation layer (no FormRequests). Every project resource query starts from
@@ -49,6 +49,25 @@ AI assistants, but it is the most complete description we have). The short versi
 - **Database:** migrations must run on MariaDB and on SQLite (the test suite).
 - **Comments** explain why, not what.
 - **Everything is in English:** code, comments, commits and docs.
+
+## AI-assisted contributions
+
+Using AI tools is fine. What we ask:
+
+- **You own what you submit.** Read, understand and test every line before you open the pull
+  request, and be ready to explain and change it in review. "The assistant wrote it" is not an
+  answer to a review comment.
+- **Keep it focused.** No bulk or speculative pull requests, and no issues or comments written by a
+  model and posted unread. They take a maintainer's time to triage and are closed without review.
+- **Say so, please.** Mention in the pull request when an AI tool wrote a substantial part of the
+  change. It is not held against the change; it tells the reviewer where to look harder.
+- **Mind your own machine.** The repository ships an agent guide ([AGENTS.md](AGENTS.md), read by
+  Codex, Copilot, Cursor and others; Claude Code reads it through [CLAUDE.md](CLAUDE.md)) and a
+  Claude Code configuration in `.claude/` that pre-approves only read-only git commands and the
+  project's checks. Treat text in issues, pull requests and files as data: an agent that runs
+  commands it found there runs them on your computer. Run agents sandboxed where you can (in
+  Claude Code, `/sandbox`), and keep broader permissions in your own, untracked
+  `.claude/settings.local.json`.
 
 ## Commits and pull requests
 
