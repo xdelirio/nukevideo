@@ -164,4 +164,7 @@ Please do not report vulnerabilities in public issues. See [SECURITY.md](SECURIT
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Released under the [MIT License](LICENSE), except the three third-party nginx modules in
+[`vod/modules/`](vod/modules/README.md), which are AGPL-3.0. The `nukevideo-proxy` image compiles
+them into its nginx and is therefore distributed under the AGPL; its source is this repository at
+the release's tag.
