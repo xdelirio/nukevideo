@@ -16,7 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // No `throttleApi()`: it would also cover the S3 multipart routes, which sign one request
-        // per part (see CLAUDE.md).
+        // per part (see AGENTS.md).
         $middleware->statefulApi();
         $middleware->trustProxies(at: '*');
         $middleware->alias([
