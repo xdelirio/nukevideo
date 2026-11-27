@@ -4,7 +4,7 @@
 
 Please **do not open a public issue** for a security problem. Report it privately through GitHub:
 **Security → Report a vulnerability** on this repository
-([direct link](https://github.com/chikenare/nukevideo/security/advisories/new)).
+([direct link](https://github.com/xdelirio/nukevideo/security/advisories/new)).
 
 Include what you can of:
 

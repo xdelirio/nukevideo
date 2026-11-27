@@ -88,7 +88,7 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
 Everything runs in Docker. Dev uses `compose.yml`, routed by a Traefik on an external `traefik` network under `*.nukevideo.localhost` (no `/etc/hosts` edits needed). `compose.yml` does not start Traefik itself; the second command below runs one, skip it if you already have one.
 
 ```bash
-git clone https://github.com/chikenare/nukevideo.git
+git clone https://github.com/xdelirio/nukevideo.git
 cd nukevideo
 
 docker network create traefik

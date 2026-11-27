@@ -3,7 +3,7 @@ import { ref, onMounted } from 'vue'
 import { Download } from '@lucide/vue'
 import SettingsService from '@/services/SettingsService'
 
-const RELEASES_URL = 'https://github.com/chikenare/nukevideo/releases'
+const RELEASES_URL = 'https://github.com/xdelirio/nukevideo/releases'
 
 const version = ref<{ current: string; latest: string; behind: number } | null>(null)
 

@@ -63,7 +63,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/chikenare/nukevideo' },
+      { icon: 'github', link: 'https://github.com/xdelirio/nukevideo' },
     ],
 
     search: {

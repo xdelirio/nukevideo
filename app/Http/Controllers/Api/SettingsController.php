@@ -15,7 +15,7 @@ class SettingsController extends Controller
 
         $releases = Cache::remember('github_releases', 3600, function () {
             $response = Http::withHeaders(['Accept' => 'application/vnd.github+json'])
-                ->get('https://api.github.com/repos/chikenare/nukevideo/releases', ['per_page' => 50]);
+                ->get('https://api.github.com/repos/xdelirio/nukevideo/releases', ['per_page' => 50]);
 
             if ($response->failed()) {
                 return [];

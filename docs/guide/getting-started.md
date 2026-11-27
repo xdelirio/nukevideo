@@ -12,7 +12,7 @@ The local stack is defined in `compose.yml`. Every service is routed under `*.nu
 ## Quick Start
 
 ```bash
-git clone https://github.com/chikenare/nukevideo.git
+git clone https://github.com/xdelirio/nukevideo.git
 cd nukevideo
 
 # Traefik routes all services; this external network must exist first
@@ -74,7 +74,7 @@ Traefik publishes each service under a `*.nukevideo.localhost` hostname (these r
 Release images are published to Docker Hub on every `v*` tag (`chikenare/nukevideo-api`, `chikenare/nukevideo-proxy`, for `linux/amd64` and `linux/arm64`). `compose.prod.yml` runs the core stack from them: the API, Horizon, the scheduler, MariaDB and Redis. It is not `compose.yml`, which is the development stack, so name it with `-f` on every command.
 
 ```bash
-git clone https://github.com/chikenare/nukevideo.git && cd nukevideo
+git clone https://github.com/xdelirio/nukevideo.git && cd nukevideo
 cp .env.example .env      # then edit it, see the checklist below
 
 echo "base64:$(openssl rand -base64 32)"   # paste into APP_KEY
