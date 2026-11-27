@@ -50,8 +50,8 @@ alike. Leave the list empty for no restriction.
   domain.
 - **Redeploy the proxy nodes to apply a change.** The list is written into the edge's nginx config
   when the node deploys.
-- **The panel is always allowed**, through the hosts in `SANCTUM_STATEFUL_DOMAINS`, so it keeps
-  playing from its own origin.
+- **The panel is always allowed**, through the hosts in `SANCTUM_STATEFUL_DOMAINS` (unset, that is
+  `APP_URL`'s host, where the API serves the panel), so it keeps playing from its own origin.
 - **How the edge knows the page.** It reads `Origin`, then `Referer`. A request with neither is
   refused only when `Sec-Fetch-Site` says a cross-site page made it, which covers a page that hides
   its `Referer`.

@@ -30,3 +30,6 @@ Thumbs.db
 # Working design specs and plans (superpowers): local notes about a deployment, not documentation
 /docs/superpowers
 /.superpowers
+
+# The panel build the release image installs (see PanelController); never committed
+/resources/panel

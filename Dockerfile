@@ -101,6 +101,52 @@ FROM php-runtime AS api-dev
 
 USER www-data
 
+# --- Node base ---
+FROM node:24-alpine AS node-base
+
+ENV CI=true
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable && \
+    mkdir -p /pnpm && chown node:node /pnpm
+
+WORKDIR /app
+RUN chown node:node /app
+
+FROM node-base AS docs
+
+USER node
+
+EXPOSE 5173
+
+CMD ["pnpm", "run", "docs:dev"]
+
+# --- Front dev ---
+FROM node-base AS front-dev
+
+USER node
+
+EXPOSE 5173
+
+CMD ["sh", "-c", "pnpm install && pnpm run dev"]
+
+# --- Front build: the admin panel, served by the API image (see PanelController) ---
+FROM node-base AS front-build
+
+# Empty builds a panel that talks to the API on its own origin, which is what the release image
+# serves. Set it only for a panel hosted somewhere else.
+ARG VITE_URL_API=""
+ENV VITE_URL_API=${VITE_URL_API}
+
+COPY front/package.json front/pnpm-lock.yaml front/pnpm-workspace.yaml ./
+
+RUN --mount=type=cache,target=/pnpm/store,id=pnpm-store \
+    pnpm install --frozen-lockfile
+
+COPY front/ ./
+# build-only: CI type-checks every pull request; repeating it here would only slow the release.
+RUN pnpm run build-only
+
 # --- API build ---
 FROM php-base AS api-build
 
@@ -121,6 +167,13 @@ RUN --mount=type=cache,target=/root/.composer/cache,id=composer-cache \
     --no-scripts
 
 COPY --chown=www-data:www-data . .
+
+# The panel's sources came in with the context only for the front-build stage; what the API serves
+# is the build. Its assets go to public/, which nginx serves as files, and its index.html next to
+# the app, where only PanelController hands it out (see there for why not public/).
+RUN rm -rf front
+COPY --from=front-build --chown=www-data:www-data /app/dist/ public/
+RUN mkdir -p resources/panel && mv public/index.html resources/panel/index.html
 
 ENV APP_VERSION=${APP_VERSION}
 
@@ -207,51 +260,3 @@ COPY vod/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-
-
-# --- Node base ---
-FROM node:24-alpine AS node-base
-
-ENV CI=true
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable && \
-    mkdir -p /pnpm && chown node:node /pnpm
-
-WORKDIR /app
-RUN chown node:node /app
-
-FROM node-base AS docs
-
-USER node
-
-EXPOSE 5173
-
-CMD ["pnpm", "run", "docs:dev"]
-
-# --- Front dev ---
-FROM node-base AS front-dev
-
-USER node
-
-EXPOSE 5173
-
-CMD ["sh", "-c", "pnpm install && pnpm run dev"]
-
-# --- Front build ---
-FROM node-base AS front-build
-
-COPY pnpm-lock.yaml package.json ./
-
-RUN --mount=type=cache,target=/pnpm/store,id=pnpm-store \
-    pnpm install --frozen-lockfile
-
-COPY . .
-RUN pnpm run build
-
-# --- Front prod ---
-FROM nginx:stable-alpine AS front-prod
-
-COPY --from=front-build /app/dist /usr/share/nginx/html
-
-CMD ["nginx", "-g", "daemon off;"]

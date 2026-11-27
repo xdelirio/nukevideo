@@ -5,6 +5,7 @@ import { type AwsBody } from '@uppy/aws-s3'
 import AwsS3Multipart from '@uppy/aws-s3'
 import type { FileUpload } from '@/types/FileUpload'
 import { useProjectsStore } from './projects'
+import { API_URL } from '@/services/api'
 
 function getXsrfToken(): Record<string, string> {
   const token = document.cookie
@@ -24,7 +25,7 @@ export function createS3Uppy(options: { debug?: boolean } = {}) {
     debug: options.debug ?? false,
     autoProceed: false,
   }).use(AwsS3Multipart, {
-    endpoint: import.meta.env.VITE_URL_API,
+    endpoint: API_URL,
     headers: getXsrfToken(),
     cookiesRule: 'include',
     limit: 4,

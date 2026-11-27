@@ -195,6 +195,11 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
 - Pages live in `front/src/pages/` (not `views/`). Pinia stores are setup stores.
 - `front/src/components/ui/` is generated shadcn-vue: never edit by hand (it is excluded from ESLint).
 - Prettier: no semicolons, single quotes, print width 100.
+- **The release API image serves the panel**: the Dockerfile's `front-build` stage builds `front/`,
+  its assets go to `public/` and its `index.html` to `resources/panel/`, which `PanelController`
+  (the router's fallback) hands out on every path no route owns. The API base URL defaults to `/api`
+  on the page's origin; `VITE_URL_API` is only for a panel hosted elsewhere (`front.yml` still
+  deploys one to Cloudflare Pages).
 
 ## Gotchas that cost hours
 
