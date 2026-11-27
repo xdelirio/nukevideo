@@ -21,7 +21,7 @@
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
     "@lezer/highlight": "^1.2.5",
-    "@lucide/vue": "^1.78.0",
+    "@lucide/vue": "^1.79.0",
     "@tailwindcss/vite": "^4.3.5",
     "@tanstack/vue-table": "^9.3.1",
     "@uiw/codemirror-theme-github": "^4.25.12",
