@@ -1,0 +1,37 @@
+# Keeps the commit-pinned actions and the lockfiles current. Minor and patch bumps are grouped into
+# one pull request per ecosystem so they arrive as a weekly batch, not a pull request per package;
+# majors still come one by one, since those are the ones that need reading.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: composer
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      composer-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /front
+    schedule:
+      interval: weekly
+    groups:
+      front-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /docs
+    schedule:
+      interval: monthly
+    groups:
+      docs:
+        patterns: ["*"]

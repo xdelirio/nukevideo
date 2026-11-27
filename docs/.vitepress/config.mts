@@ -4,6 +4,10 @@ export default defineConfig({
   title: 'NukeVideo',
   description: 'Open-source video processing and delivery engine',
 
+  // Local working notes (gitignored), not documentation: kept out of the build so a docs build
+  // from a working copy cannot publish them.
+  srcExclude: ['superpowers/**'],
+
   themeConfig: {
     logo: '🎬',
     nav: [
@@ -59,7 +63,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/chikenare/nukevideo' },
+      { icon: 'github', link: 'https://github.com/xdelirio/nukevideo' },
     ],
 
     search: {

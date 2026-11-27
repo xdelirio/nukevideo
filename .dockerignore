@@ -16,6 +16,7 @@
 .phpactor.json
 
 .claude
+.superpowers
 
 # OS
 .DS_Store
@@ -33,8 +34,13 @@ Thumbs.db
 # api-build's `COPY . .` layer on every front-only commit. front-dev bind-mounts it at runtime.
 /front
 
-# Storage & cache
+# Storage & cache. storage/app keeps its two directories and nothing in them: a developer's local
+# files there (scratch exports, benchmark dumps) must not ride into a published image.
+/storage/app/*
+!/storage/app/private
+!/storage/app/public
 /storage/app/private/*
+/storage/app/public/*
 /storage/logs
 /storage/framework/cache
 /storage/framework/sessions
@@ -51,11 +57,17 @@ bootstrap/cache/*
 /public/storage
 /storage/*.key
 
-# Docker
-docker-compose.yml
+# Docker and repository tooling the image never runs
+compose.yml
+compose.prod.yml
 Dockerfile
+.dockerignore
+.editorconfig
+/bin
 
-# Documentation
+# Documentation (the docs site is its own project; the API never reads it). vector/ and vod/ stay:
+# NodeService ships vector/vector.yaml and CloudflareDns reads vod/nginx at runtime.
+/docs
 *.md
 LICENSE
 

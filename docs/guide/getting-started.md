@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you through running NukeVideo locally for development with Docker.
+This guide walks you through running NukeVideo locally for development with Docker, and then through a [production install](#production).
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@ The local stack is defined in `compose.yml`. Every service is routed under `*.nu
 ## Quick Start
 
 ```bash
-git clone https://github.com/chikenare/nukevideo.git
+git clone https://github.com/xdelirio/nukevideo.git
 cd nukevideo
 
 # Traefik routes all services; this external network must exist first
@@ -52,7 +52,7 @@ The seeder creates an admin user:
 - **Email:** `test@example.com`
 - **Password:** `password`
 
-Sign in at the admin SPA (see the URL below).
+Sign in at the admin SPA (see the URL below). The seeder is for development only: never seed a production install, create the first admin with `php artisan users:create-admin` instead (see [Production](#production)).
 
 ## Local URLs
 
@@ -68,6 +68,54 @@ Traefik publishes each service under a `*.nukevideo.localhost` hostname (these r
 | RustFS console | `http://s3-ui.nukevideo.localhost` |
 | RedisInsight | `http://redis.nukevideo.localhost` |
 | Traefik dashboard | `http://localhost:8080` (the Traefik started above) |
+
+## Production
+
+Release images are published to Docker Hub on every `v*` tag (`chikenare/nukevideo-api`, `chikenare/nukevideo-proxy`, for `linux/amd64` and `linux/arm64`). `compose.prod.yml` runs the core stack from them: the API, Horizon, the scheduler, MariaDB and Redis. It is not `compose.yml`, which is the development stack, so name it with `-f` on every command.
+
+```bash
+git clone https://github.com/xdelirio/nukevideo.git && cd nukevideo
+cp .env.example .env      # then edit it, see the checklist below
+
+echo "base64:$(openssl rand -base64 32)"   # paste into APP_KEY
+
+export TAG=vX.Y.Z         # a release tag; `latest` moves under you
+docker compose -f compose.prod.yml up -d
+docker compose -f compose.prod.yml exec nukevideo-api php artisan users:create-admin
+```
+
+The API container runs the migrations itself every time it starts, so there is no separate migrate step. Set `APP_KEY` before the first start: the migrations store encrypted settings.
+
+`compose.prod.yml` publishes the API on port `8080` (`API_PORT`) over plain HTTP. Put a TLS-terminating reverse proxy in front of it; the panel's session cookie is only safe over HTTPS.
+
+### `.env` checklist
+
+| Variable | Value |
+|----------|-------|
+| `APP_ENV` / `APP_DEBUG` | `production` / `false`. Debug mode prints stack traces, and with them configuration, to anyone who triggers an error. |
+| `APP_KEY` | The `openssl` output above. It encrypts the stored SSH key, the Cloudflare token and the Tailscale key: keep a copy, because a lost key makes them unreadable. |
+| `APP_URL` | The public HTTPS URL of the API. |
+| `DB_HOST` / `REDIS_HOST` | `db` / `redis`, the service names in `compose.prod.yml`. |
+| `DB_PASSWORD` | A strong password. The MariaDB container is initialised with it, as the root password as well. |
+| `WEBHOOK_SECRET`, `INTERNAL_API_SECRET` | Two different random values, e.g. `openssl rand -hex 32` each. |
+| `AWS_*` | Your S3 bucket and credentials (see [S3 Storage](/guide/configuration#s3-storage)). |
+| `SESSION_SECURE_COOKIE` | `true`, so the session cookie is never sent over plain HTTP. |
+| `SANCTUM_STATEFUL_DOMAINS` | The host the panel is served from (`app.example.com`). Only requests from these hosts are authenticated by the session cookie. |
+| `SESSION_DOMAIN` | The parent domain the panel and the API share (`.example.com`). The panel signs in with a cookie, so it must be served from the same site as the API. |
+
+The full reference is on the [Configuration](/guide/configuration) page.
+
+### The admin panel
+
+The panel is a static SPA in `front/` and is not part of the release images. Build it against your API and serve `front/dist/` from any static host that answers unknown paths with `index.html` (the router uses HTML5 history):
+
+```bash
+cd front
+pnpm install --frozen-lockfile
+VITE_URL_API=https://api.example.com pnpm run build-only
+```
+
+Then sign in with the admin you created and continue with [Nodes](/guide/nodes): workers to encode, proxies to deliver.
 
 ## Next Steps
 

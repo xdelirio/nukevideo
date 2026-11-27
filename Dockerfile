@@ -8,31 +8,48 @@ FROM alpine:3.20 AS shaka-builder
 
 ARG TARGETARCH
 ARG SHAKA_PACKAGER_VERSION
+# The release binaries of SHAKA_PACKAGER_VERSION. A download that does not hash to these fails
+# the build, so a replaced release asset cannot ship. Bumping the version means bumping both.
+ARG SHAKA_PACKAGER_SHA256_X64=88b022b8cb12602ddb539972efd07a3496ea64f8662a484798c96e95afa41fd8
+ARG SHAKA_PACKAGER_SHA256_ARM64=e4a43aaa8fdb87d0306876bc41581b371d7082e9d1b8469aef06a4e74004fd69
 
 RUN apk add --no-cache curl && \
-    if [ "$TARGETARCH" = "arm64" ]; then SHAKA_ARCH="arm64"; else SHAKA_ARCH="x64"; fi && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+      SHAKA_ARCH="arm64"; SHAKA_SHA256="$SHAKA_PACKAGER_SHA256_ARM64"; \
+    else \
+      SHAKA_ARCH="x64"; SHAKA_SHA256="$SHAKA_PACKAGER_SHA256_X64"; \
+    fi && \
     curl -fSL "https://github.com/shaka-project/shaka-packager/releases/download/${SHAKA_PACKAGER_VERSION}/packager-linux-${SHAKA_ARCH}" \
       -o /usr/local/bin/packager && \
+    echo "${SHAKA_SHA256}  /usr/local/bin/packager" | sha256sum -c - && \
     chmod +x /usr/local/bin/packager
 
 FROM alpine:3.20 AS ffmpeg-builder
 
 ARG TARGETARCH
-ARG FFMPEG_URL=""
-# Rolling build; pin with --build-arg FFMPEG_BUILD_TAG=autobuild-… FFMPEG_BUILD_ID=N-…
-ARG FFMPEG_BUILD_TAG=latest
-ARG FFMPEG_BUILD_ID=master-latest
+# Pinned, not BtbN's rolling `latest`: two images built a day apart used to carry different
+# encoders, so a release was not reproducible and the encodes of one fleet could differ by node.
+# Pinned to a build AND its checksums (from the release's checksums.sha256), so a replaced asset
+# fails the build instead of shipping.
+#
+# BtbN prunes its daily builds after about two weeks and keeps the month-end ones for about two
+# years: a daily tag here stops building once it is pruned. Prefer a month-end build
+# (autobuild-YYYY-MM-{28..31}-…). To bump: pick the tag, take the `N-…` id from its asset names,
+# and copy both linux64/linuxarm64 `-gpl.tar.xz` lines from its checksums.sha256.
+ARG FFMPEG_BUILD_TAG=autobuild-2026-11-24-12-41
+ARG FFMPEG_BUILD_ID=N-129267-g9ec5cf1aac
+ARG FFMPEG_SHA256_AMD64=17030ca1c9c7e40bfaecb46a1c57292704a3ac8b853a62ee117b3a4b10c518e1
+ARG FFMPEG_SHA256_ARM64=32ea09918512e76ece3a207481b1c6b072c2ef1ee4a02d9d334b7ab41c93fbe2
 
 RUN apk add --no-cache curl tar xz && \
-    if [ -z "$FFMPEG_URL" ]; then \
-      if [ "$TARGETARCH" = "arm64" ]; then \
-        FFMPEG_ARCH="linuxarm64"; \
-      else \
-        FFMPEG_ARCH="linux64"; \
-      fi && \
-      FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_BUILD_TAG}/ffmpeg-${FFMPEG_BUILD_ID}-${FFMPEG_ARCH}-gpl.tar.xz"; \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+      FFMPEG_ARCH="linuxarm64"; FFMPEG_SHA256="$FFMPEG_SHA256_ARM64"; \
+    else \
+      FFMPEG_ARCH="linux64"; FFMPEG_SHA256="$FFMPEG_SHA256_AMD64"; \
     fi && \
-    curl -fSL "$FFMPEG_URL" -o /tmp/ffmpeg.tar.xz && \
+    curl -fSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_BUILD_TAG}/ffmpeg-${FFMPEG_BUILD_ID}-${FFMPEG_ARCH}-gpl.tar.xz" \
+      -o /tmp/ffmpeg.tar.xz && \
+    echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - && \
     tar -xJf /tmp/ffmpeg.tar.xz -C /tmp && \
     mv /tmp/ffmpeg-*/bin/ffmpeg /usr/local/bin/ffmpeg && \
     mv /tmp/ffmpeg-*/bin/ffprobe /usr/local/bin/ffprobe && \
