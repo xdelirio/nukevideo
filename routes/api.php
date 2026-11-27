@@ -187,6 +187,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('nodes/{node}/stop', [NodeOperationController::class, 'stop']);
         Route::get('node-operations', [NodeOperationController::class, 'index']);
         Route::get('node-operations/{operation}/lines', [NodeOperationController::class, 'lines']);
+        Route::get('node-operations/{operation}/stream', [NodeOperationController::class, 'stream']);
         Route::post('nodes/{node}/validate', [NodeController::class, 'validateNode']);
         Route::get('nodes/{node}/cache-disks', [NodeController::class, 'cacheDisks']);
         Route::get('analytics/edges', [AnalyticsController::class, 'edges']);

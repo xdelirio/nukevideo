@@ -5,6 +5,10 @@ hero:
   name: NukeVideo
   text: Video Processing & Delivery Engine
   tagline: Open-source, self-hosted core for uploading, encoding, and serving video. Integrate it into your own backend.
+  image:
+    light: /brand/mark.svg
+    dark: /brand/mark-dark.svg
+    alt: NukeVideo
   actions:
     - theme: brand
       text: Get Started

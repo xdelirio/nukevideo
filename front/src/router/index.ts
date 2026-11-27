@@ -12,6 +12,7 @@ import ApiKeysPage from '@/pages/settings/ApiKeysPage.vue'
 import AppSettingsPage from '@/pages/settings/AppSettingsPage.vue'
 import CdnSettingsPage from '@/pages/settings/CdnSettingsPage.vue'
 import LoginPage from '@/pages/auth/LoginPage.vue'
+import NotFoundPage from '@/pages/errors/NotFoundPage.vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -35,6 +36,9 @@ const router = createRouter({
     { name: 'ApiKeys', path: '/settings/api-keys', component: ApiKeysPage },
     { name: 'AppSettings', path: '/settings/app', component: AppSettingsPage, meta: { admin: true } },
     { name: 'CdnSettings', path: '/settings/cdn', component: CdnSettingsPage, meta: { admin: true } },
+    // Last: any path no route above matches. The server answers every unknown path with the
+    // panel (it cannot know the panel's routes), so the panel has to say it is not a page.
+    { name: 'Not found', path: '/:pathMatch(.*)*', component: NotFoundPage },
   ],
 })
 

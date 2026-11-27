@@ -5,11 +5,11 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  /* Brand colors — vibrant red/orange */
-  --vp-c-brand-1: #f43f5e;
-  --vp-c-brand-2: #e11d48;
-  --vp-c-brand-3: #be123c;
-  --vp-c-brand-soft: rgba(244, 63, 94, 0.14);
+  /* Brand colors — the logo's violet (docs/public/brand) */
+  --vp-c-brand-1: #6a47f5;
+  --vp-c-brand-2: #5a36e0;
+  --vp-c-brand-3: #4a29c4;
+  --vp-c-brand-soft: rgba(124, 92, 255, 0.14);
 
   /* Tip/accent */
   --vp-c-tip-1: var(--vp-c-brand-1);
@@ -26,15 +26,15 @@
   --vp-home-hero-name-color: transparent;
   --vp-home-hero-name-background: linear-gradient(
     135deg,
-    #f43f5e 0%,
-    #fb923c 100%
+    #7c5cff 0%,
+    #b39dff 100%
   );
 
   /* Home hero image glow */
   --vp-home-hero-image-background-image: linear-gradient(
     135deg,
-    rgba(244, 63, 94, 0.3) 0%,
-    rgba(251, 146, 60, 0.3) 100%
+    rgba(124, 92, 255, 0.3) 0%,
+    rgba(179, 157, 255, 0.3) 100%
   );
   --vp-home-hero-image-filter: blur(56px);
 
@@ -51,15 +51,15 @@
 }
 
 .dark {
-  --vp-c-brand-1: #fb7185;
-  --vp-c-brand-2: #f43f5e;
-  --vp-c-brand-3: #e11d48;
-  --vp-c-brand-soft: rgba(251, 113, 133, 0.16);
+  --vp-c-brand-1: #9b82ff;
+  --vp-c-brand-2: #7c5cff;
+  --vp-c-brand-3: #6a47f5;
+  --vp-c-brand-soft: rgba(155, 130, 255, 0.16);
 
   --vp-home-hero-image-background-image: linear-gradient(
     135deg,
-    rgba(251, 113, 133, 0.25) 0%,
-    rgba(251, 146, 60, 0.25) 100%
+    rgba(155, 130, 255, 0.25) 0%,
+    rgba(124, 92, 255, 0.25) 100%
   );
 }
 
@@ -99,11 +99,11 @@
 .VPFeature:hover {
   border-color: var(--vp-c-brand-1) !important;
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(244, 63, 94, 0.08);
+  box-shadow: 0 8px 24px rgba(124, 92, 255, 0.08);
 }
 
 .dark .VPFeature:hover {
-  box-shadow: 0 8px 24px rgba(251, 113, 133, 0.06);
+  box-shadow: 0 8px 24px rgba(155, 130, 255, 0.06);
 }
 
 .VPFeature .title {

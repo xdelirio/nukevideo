@@ -1,4 +1,4 @@
-import apiClient from './api'
+import apiClient, { API_URL } from './api'
 
 class NodeService {
     private readonly BASE_PATH = '/nodes'
@@ -64,9 +64,13 @@ class NodeService {
         return res.data.data
     }
 
-    async getOperationLines(id: number, after: number): Promise<{ lines: string[]; next: number; status: string }> {
-        const res = await this.api.get(`/node-operations/${id}/lines`, { params: { after } })
-        return res.data
+    /**
+     * An operation's output as Server-Sent Events: `lines` events while it runs, then `done`.
+     * EventSource sends the session cookie (withCredentials for a panel on another origin) and
+     * reconnects on its own, resuming from the last event it received.
+     */
+    streamOperation(id: number): EventSource {
+        return new EventSource(`${API_URL}/node-operations/${id}/stream`, { withCredentials: true })
     }
 
     async generateBootstrapToken(id: number): Promise<{ command: string }> {

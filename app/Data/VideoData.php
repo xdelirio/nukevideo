@@ -25,7 +25,9 @@ class VideoData extends Data
         /** The template, and the version of it, this video was encoded with. Later edits to the
          *  template do not change it. Null once the template is gone. */
         public ?VideoTemplateData $template,
-        public string $thumbnailUrl,
+        /** Null until the thumbnail can exist: it is cut from the source's mirror, so a video still
+         *  pending or downloading has none, and a URL then is a broken image (and an edge miss). */
+        public ?string $thumbnailUrl,
         public string $storyboardUrl,
         /** @var OutputData[] */
         public array $outputs,
@@ -53,7 +55,9 @@ class VideoData extends Data
             externalUserId: $video->external_user_id,
             externalResourceId: $video->external_resource_id,
             template: VideoTemplateData::fromVideo($video),
-            thumbnailUrl: $assets->for($video->ulid, Video::THUMBNAIL_FILENAME),
+            thumbnailUrl: in_array($video->status, [VideoStatus::PENDING->value, VideoStatus::DOWNLOADING->value], true)
+                ? null
+                : $assets->for($video->ulid, Video::THUMBNAIL_FILENAME),
             storyboardUrl: $assets->for($video->ulid, Video::STORYBOARD_VTT_FILENAME),
             outputs: OutputData::collect($video->outputs)->all(),
             streams: StreamData::collect($video->streams)->all(),

@@ -598,6 +598,62 @@ http {
             proxy_set_header X-Amz-Date $aws_auth_date;
             proxy_set_header X-Amz-Content-SHA256 UNSIGNED-PAYLOAD;
             proxy_set_header Authorization $aws_token;
+
+            # S3's error bodies name the bucket, the full key, the provider and its request ids,
+            # and this hop handed them to anyone who asked for a made-up path. Every error is
+            # answered here instead, with nothing of the bucket in it. 403 becomes 404 as well: a
+            # bucket refuses a missing key with AccessDenied when the credentials cannot list it,
+            # and telling the two apart says something about how the bucket is set up. The status
+            # classes the outer server acts on survive: 404 is cached for a minute there, 416 tells
+            # a player its range is past the end, and a 5xx still lets it serve a stale copy.
+            # Errors this hop raises itself (the 429 of `limit_req`, a 502/504 when the bucket is
+            # unreachable) land on the same pages. A 304 to a revalidation is not an error and is
+            # never intercepted.
+            proxy_intercept_errors on;
+            error_page 403 404 =404 @not_found;
+            error_page 416 =416 @range_not_satisfiable;
+            error_page 429 =429 @too_many_requests;
+            error_page 301 302 303 307 308 400 401 405 409 411 412 413 500 501 502 503 504 =502 @origin_error;
+
+            # The provider's own headers say which service and which bucket region served the
+            # object, and nothing a player needs. nginx has no wildcard for these, so each provider's
+            # are named: AWS's, and iDrive e2's object metadata (`e2iid`, `erid`).
+            proxy_hide_header x-amz-request-id;
+            proxy_hide_header x-amz-id-2;
+            proxy_hide_header x-amz-version-id;
+            proxy_hide_header x-amz-server-side-encryption;
+            proxy_hide_header x-amz-storage-class;
+            proxy_hide_header x-amz-meta-s3cmd-attrs;
+            proxy_hide_header x-amz-meta-e2iid;
+            proxy_hide_header x-amz-meta-erid;
+            proxy_hide_header X-XSS-Protection;
+            proxy_hide_header Content-Security-Policy;
+        }
+
+        # `types { }` empties the extension map: nginx would otherwise label the body by the path it
+        # answers for, and a missing thumbnail.jpg came back as image/jpeg.
+        location @not_found {
+            types { }
+            default_type text/plain;
+            return 404 "Not found\n";
+        }
+
+        location @range_not_satisfiable {
+            types { }
+            default_type text/plain;
+            return 416 "Range not satisfiable\n";
+        }
+
+        location @too_many_requests {
+            types { }
+            default_type text/plain;
+            return 429 "Too many requests\n";
+        }
+
+        location @origin_error {
+            types { }
+            default_type text/plain;
+            return 502 "Origin unavailable\n";
         }
     }
 

@@ -1,6 +1,9 @@
 <div align="center">
 
-# 🎬 NukeVideo
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/public/brand/logo-full-dark.svg">
+  <img src="docs/public/brand/logo-full.svg" alt="NukeVideo" width="320">
+</picture>
 
 **Open-source, self-hosted video processing & delivery engine.**
 

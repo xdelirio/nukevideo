@@ -43,6 +43,8 @@ async function handleLogin() {
   <div class="flex min-h-screen items-center justify-center px-4">
     <Card class="w-full max-w-md">
       <CardHeader class="text-center">
+        <img src="/logo.svg" alt="NukeVideo" class="mx-auto mb-2 size-12 dark:hidden" />
+        <img src="/logo-dark.svg" alt="NukeVideo" class="mx-auto mb-2 hidden size-12 dark:block" />
         <CardTitle class="text-2xl">Login</CardTitle>
         <CardDescription>Enter your credentials to access your account</CardDescription>
       </CardHeader>
