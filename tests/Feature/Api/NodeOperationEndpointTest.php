@@ -9,6 +9,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Redis;
 use Laravel\Sanctum\Sanctum;
+use Spatie\Activitylog\Models\Activity;
 
 uses(RefreshDatabase::class);
 
@@ -63,6 +64,51 @@ it('serves the lines after a cursor', function () {
     $this->getJson("/api/node-operations/{$id}/lines?after=2")
         ->assertOk()
         ->assertExactJson(['lines' => ['c', 'd'], 'next' => 4, 'status' => 'queued']);
+});
+
+/** Marks the operation finished, as the job does when it ends. */
+function finishOperation(int $id, string $status): void
+{
+    $op = Activity::find($id);
+    $op->properties = $op->properties->merge(['status' => $status]);
+    $op->save();
+}
+
+it('streams a finished operation\'s output and closes with its status', function () {
+    $node = apiNode();
+    $id = $this->postJson("/api/nodes/{$node->id}/deploy")->json('data.id');
+    finishOperation($id, 'succeeded');
+    Redis::shouldReceive('lrange')->with("node-ops:{$id}", 0, -1)->andReturn(['a', 'b']);
+
+    $response = $this->get("/api/node-operations/{$id}/stream")->assertOk();
+
+    expect($response->headers->get('Content-Type'))->toStartWith('text/event-stream')
+        ->and($response->headers->get('X-Accel-Buffering'))->toBe('no')
+        ->and($response->streamedContent())
+        ->toContain("id: 2\nevent: lines\ndata: {\"lines\":[\"a\",\"b\"],\"status\":\"succeeded\"}\n\n")
+        ->toContain("event: done\ndata: {\"status\":\"succeeded\"}\n\n");
+});
+
+it('resumes a stream from the browser\'s Last-Event-ID', function () {
+    $node = apiNode();
+    $id = $this->postJson("/api/nodes/{$node->id}/deploy")->json('data.id');
+    finishOperation($id, 'failed');
+    Redis::shouldReceive('lrange')->with("node-ops:{$id}", 5, -1)->andReturn(['f']);
+
+    $content = $this->get("/api/node-operations/{$id}/stream", ['Last-Event-ID' => '5'])->streamedContent();
+
+    expect($content)->toContain('id: 6')->toContain('"lines":["f"]');
+});
+
+it('only streams node operations, and only to admins', function () {
+    $node = apiNode();
+    $id = $this->postJson("/api/nodes/{$node->id}/deploy")->json('data.id');
+    $other = activity('default')->log('not a node operation');
+
+    $this->get("/api/node-operations/{$other->id}/stream")->assertNotFound();
+
+    Sanctum::actingAs(User::factory()->create(['is_admin' => false]));
+    $this->get("/api/node-operations/{$id}/stream")->assertForbidden();
 });
 
 it('lists operations filtered by node', function () {

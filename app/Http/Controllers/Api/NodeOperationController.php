@@ -16,9 +16,13 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Spatie\Activitylog\Models\Activity;
 use Spatie\LaravelData\Optional;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class NodeOperationController extends Controller
 {
+    /** How long one event stream stays open before the browser is left to reconnect. */
+    private const STREAM_SECONDS = 30;
+
     public function __construct(private NodeOperationService $operations) {}
 
     public function index(Request $request): JsonResponse
@@ -46,6 +50,71 @@ class NodeOperationController extends Controller
             'lines' => $lines,
             'next' => $after + count($lines),
             'status' => $operation->properties['status'],
+        ]);
+    }
+
+    /**
+     * The same output as `lines()`, pushed as Server-Sent Events: one `lines` event per second
+     * while there is something new, and a `done` event with the final status, after which the
+     * stream closes. Each event's `id` is the cursor, so the browser's automatic reconnect resumes
+     * where it left off (`Last-Event-ID`) and never repeats or skips a line.
+     *
+     * A stream holds a PHP-FPM worker for as long as it is open, and a deploy runs for minutes, so
+     * each one closes after STREAM_SECONDS and lets the browser reconnect: an admin watching a long
+     * deploy costs one worker a second at a time, never one for the whole deploy. Something is
+     * written every tick (a comment when there is nothing new), because PHP only notices a
+     * disconnected viewer when a write fails.
+     */
+    public function stream(Request $request, Activity $operation): StreamedResponse
+    {
+        abort_unless($operation->log_name === 'node', 404);
+        $after = max(0, (int) ($request->header('Last-Event-ID') ?? $request->integer('after')));
+
+        return response()->stream(function () use ($operation, $after) {
+            // PHP buffers output (output_buffering = 4096 in the image) on top of nginx, and
+            // flush() alone empties only the latter: without ob_flush() every event waited for
+            // 4 KB or for the stream to close.
+            $send = function (string $chunk): void {
+                echo $chunk;
+                if (ob_get_level() > 0) {
+                    ob_flush();
+                }
+                flush();
+            };
+
+            $deadline = microtime(true) + self::STREAM_SECONDS;
+            $send("retry: 1000\n\n");
+
+            do {
+                // Status before lines: a job appends its last line and then marks itself
+                // finished, so lines read after a final status are all of them.
+                $status = $operation->refresh()->properties['status'];
+                $lines = $this->operations->lines($operation->id, $after);
+
+                if ($lines) {
+                    $after += count($lines);
+                    $send("id: {$after}\nevent: lines\ndata: ".json_encode(['lines' => $lines, 'status' => $status])."\n\n");
+                } else {
+                    $send(": tick\n\n");
+                }
+
+                if (! in_array($status, ['queued', 'running'], true)) {
+                    $send("event: done\ndata: ".json_encode(['status' => $status])."\n\n");
+
+                    return;
+                }
+
+                if (connection_aborted()) {
+                    return;
+                }
+                sleep(1);
+            } while (microtime(true) < $deadline);
+        }, 200, [
+            'Content-Type' => 'text/event-stream',
+            'Cache-Control' => 'no-cache',
+            // nginx (the image's, in front of PHP-FPM) buffers a response unless told not to,
+            // which would hold the events until the stream closes.
+            'X-Accel-Buffering' => 'no',
         ]);
     }
 

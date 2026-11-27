@@ -138,7 +138,7 @@ returns for each row, and the one a [webhook](/api/webhooks#event-payload) carri
 | `priority` | string | `low`, `normal` or `high`: where the video sat in the dispatch queue. See [Priority](#priority). |
 | `duration` | number | Seconds. `0` until the source has been probed. |
 | `aspectRatio` | string | Empty until the source has been probed. |
-| `thumbnailUrl` / `storyboardUrl` | string | Served unsigned from the CDN when a delivery node is available, and from `GET /api/videos/{ulid}/{filename}` otherwise. The URL is stable, but the object only exists once the video has been processed. |
+| `thumbnailUrl` / `storyboardUrl` | string | Served unsigned from the CDN when a delivery node is available, and from `GET /api/videos/{ulid}/{filename}` otherwise. The URL is stable, but the object only exists once the video has been processed. `thumbnailUrl` is `null` while the video is `pending` or `downloading`: the thumbnail is cut from the source, which is not there yet. |
 | `size` | integer | Every stream's `packageSize` plus `fileSize` — the whole S3 footprint. |
 | `servedSize` | integer | Only `packageSize`, i.e. the bytes that serve playback. `size` minus this is retained source and processed-file overhead. |
 | `outputs[].formats` | string[] | Plural: one package serves both `hls` and `dash`. |

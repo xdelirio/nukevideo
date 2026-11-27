@@ -297,6 +297,25 @@ GET /api/node-operations/{operation}/lines?after={n}
 Poll with `after` set to the previous `next` until `status` is no longer `queued` or `running`.
 Output is kept for seven days.
 
+### Stream an Operation's Output
+
+```
+GET /api/node-operations/{operation}/stream
+```
+
+The same output pushed as [Server-Sent Events](https://developer.mozilla.org/docs/Web/API/Server-sent_events), which is what the panel uses:
+
+```
+id: 57
+event: lines
+data: {"lines":["=== Worker image ===","..."],"status":"running"}
+
+event: done
+data: {"status":"succeeded"}
+```
+
+A `lines` event arrives whenever there is new output, at most once a second; its `id` is the cursor. `done` carries the final status, and the stream ends after it: close the `EventSource` there, or it reconnects. The server also ends every stream after 30 seconds, and an `EventSource` reconnects on its own with `Last-Event-ID`, resuming where it stopped (`?after=` does the same for a client that is not a browser).
+
 ## SSH Key
 
 The panel connects to every node with one SSH key, kept in the application settings. Install its
