@@ -5,8 +5,9 @@ on:
     tags: ["v*"]
 
 # Pushing goes through the Docker Hub token, not GITHUB_TOKEN, so the token needs nothing past
-# reading the checkout. Third-party actions are pinned by commit (a tag can be moved to other
-# code; a commit id cannot) and Dependabot keeps the pins current.
+# reading the checkout; the release job asks for its own write access. Third-party actions are
+# pinned by commit (a tag can be moved to other code; a commit id cannot) and Dependabot keeps the
+# pins current.
 permissions:
   contents: read
 
@@ -136,3 +137,30 @@ jobs:
 
       - name: Inspect image
         run: docker buildx imagetools inspect ${{ env.IMAGE_PREFIX }}-${{ matrix.image }}:${{ steps.meta.outputs.version }}
+
+  # The GitHub Release is what the panel's version check reads (SettingsController asks the
+  # releases API, not the tags), so without one no install ever learns a new version exists. It
+  # waits for both images: announcing a version before Docker Hub has it would send a deploy to
+  # pull a tag that is not there yet.
+  release:
+    runs-on: ubuntu-latest
+    needs: merge
+
+    permissions:
+      contents: write
+
+    steps:
+      # A re-run of the workflow must not fail on the release the first run made. A tag with a
+      # suffix (v2.1.0-rc.1) is a prerelease, which the version check skips.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+            exit 0
+          fi
+          flags=(--verify-tag --generate-notes --title "$TAG")
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${flags[@]}"
