@@ -18,7 +18,7 @@ use App\Services\SSHService;
 use App\Settings\AppSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
-use phpseclib3\Crypt\EC;
+use phpseclib4\Crypt\EC;
 
 uses(RefreshDatabase::class);
 

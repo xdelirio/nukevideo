@@ -36,7 +36,9 @@ it('takes the container duration when the container states one', function () {
 
 it('reports no track for a file that is not media', function () {
     file_put_contents($empty = "{$this->dir}/empty.srt", '');
-    file_put_contents($binary = "{$this->dir}/binary.srt", random_bytes(4096));
+    // Fixed bytes, not random_bytes(): about one random 4 KB block in 150 probes as an LRC
+    // subtitle, which failed the suite now and then for nothing.
+    file_put_contents($binary = "{$this->dir}/binary.srt", str_repeat("\x00\xff\x7f\x80\x01\xfe", 683));
 
     expect(app(TrackProbe::class)->probe($empty, 'subtitle'))->toBeNull()
         ->and(app(TrackProbe::class)->probe($binary, 'subtitle'))->toBeNull();
