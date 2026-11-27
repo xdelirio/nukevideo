@@ -4,7 +4,7 @@ namespace App\Data\AppSettings;
 
 use App\Data\RequestData;
 use App\Services\SshKeyService;
-use phpseclib3\Crypt\PublicKeyLoader;
+use phpseclib4\Crypt\PublicKeyLoader;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Mappers\CamelCaseMapper;
 
