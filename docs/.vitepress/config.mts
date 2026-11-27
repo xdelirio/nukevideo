@@ -4,12 +4,17 @@ export default defineConfig({
   title: 'NukeVideo',
   description: 'Open-source video processing and delivery engine',
 
+  head: [
+    ['link', { rel: 'icon', href: '/favicon.ico', sizes: '48x48' }],
+    ['link', { rel: 'icon', href: '/brand/mark.svg', type: 'image/svg+xml' }],
+  ],
+
   // Local working notes (gitignored), not documentation: kept out of the build so a docs build
   // from a working copy cannot publish them.
   srcExclude: ['superpowers/**'],
 
   themeConfig: {
-    logo: '🎬',
+    logo: { light: '/brand/mark.svg', dark: '/brand/mark-dark.svg', alt: 'NukeVideo' },
     nav: [
       { text: 'Guide', link: '/guide/what-is-nukevideo' },
       { text: 'API Reference', link: '/api/authentication' },

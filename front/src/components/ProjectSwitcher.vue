@@ -54,11 +54,9 @@ const handleManage = () => {
             size="lg"
             class="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
           >
-            <div
-              class="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground"
-            >
-              <FolderKanban class="size-4" />
-            </div>
+            <!-- The brand mark; the dark file has a lighter tile so it does not sink into a dark sidebar. -->
+            <img src="/logo.svg" alt="" class="size-8 shrink-0 dark:hidden" />
+            <img src="/logo-dark.svg" alt="" class="hidden size-8 shrink-0 dark:block" />
             <div class="grid flex-1 text-left text-sm leading-tight">
               <span class="truncate font-medium">
                 {{ projectsStore.currentProject?.name ?? 'No project' }}

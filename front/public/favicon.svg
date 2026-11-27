@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="nvb-t">
+  <title id="nvb-t">NukeVideo</title>
+  <defs>
+    <mask id="nvb-g" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#000"/>
+      <polygon points="20,12 20,52 54,32" fill="#fff" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><polygon points="28,23.86 41.1,39.73 41.1,62 28,62" fill="#000"/><polygon points="32,2 32,19.06 42,31.06 42,2" fill="#000"/>
+    </mask>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#111114"/>
+  <g mask="url(#nvb-g)">
+    <rect width="64" height="64" fill="#FFFFFF"/>
+    <rect x="42" width="22" height="64" fill="#7C5CFF"/>
+  </g>
+</svg>

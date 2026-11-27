@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 286 64" width="286" height="64" role="img" aria-labelledby="nvb-logo-full-t">
+  <title id="nvb-logo-full-t">NukeVideo</title>
+  <g>
+    <defs>
+      <mask id="nvb-logo-full-g" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+        <rect width="64" height="64" fill="#000"/>
+        <polygon points="20,12 20,52 54,32" fill="#fff" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><polygon points="28,23.86 41.1,39.73 41.1,62 28,62" fill="#000"/><polygon points="32,2 32,19.06 42,31.06 42,2" fill="#000"/>
+      </mask>
+    </defs>
+    <rect width="64" height="64" rx="14" fill="#111114"/>
+    <g mask="url(#nvb-logo-full-g)">
+      <rect width="64" height="64" fill="#FFFFFF"/>
+      <rect x="42" width="22" height="64" fill="#7C5CFF"/>
+    </g>
+  </g>
+  <!-- Wordmark drawn as paths: no font dependency -->
+  <g transform="translate(78 1)" fill="#111114">
+    <path d="M0 16H5V46H0ZM19 16H24V46H19ZM0 16H6.2L24 46H17.8ZM51 16H56V46H51ZM63.5 24H70.5L56 37.5V31ZM59.29 31.5L64 28.5L71.5 46H65.5ZM99 16H104.6L111 37.33L117.4 16H123L114 46H108ZM124.5 24H129.5V46H124.5ZM124.5 16H129.5V21H124.5ZM150 16H155V46H150Z"/>
+    <path d="M30 24V36A7.5 7.5 0 0 0 45 36V24M45 24V46M94.0 35A8.5 8.5 0 1 0 92.01 40.46M74.5 35H96.5M152.5 35A8.5 8.5 0 1 1 135.5 35A8.5 8.5 0 1 1 152.5 35M178.0 35A8.5 8.5 0 1 0 176.01 40.46M158.5 35H180.5M203.5 35A8.5 8.5 0 1 1 186.5 35A8.5 8.5 0 1 1 203.5 35" fill="none" stroke="#111114" stroke-width="5"/>
+  </g>
+</svg>
