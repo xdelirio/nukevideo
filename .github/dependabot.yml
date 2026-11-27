@@ -24,6 +24,11 @@ updates:
     directory: /front
     schedule:
       interval: weekly
+    ignore:
+      # The types follow the Node the front builds on (24, in CI and the image), not the newest
+      # Node: a newer major types APIs that Node 24 does not have. Bump by hand with the runtime.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
     groups:
       front-minor:
         update-types: [minor, patch]
