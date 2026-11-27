@@ -23,9 +23,15 @@ on:
 
 # One deploy at a time per environment, queued in order: two tags a minute apart must not race,
 # or the older build could land last on production.
+#
+# Pull requests get a group of their own, per pull request. They deploy nothing, and in the staging
+# group a waiting PR run displaced the waiting deploy of main (a group keeps one pending run), so
+# main's latest build never reached staging. A newer push to the same PR cancels its older run.
 concurrency:
-  group: front-deploy-${{ startsWith(github.ref, 'refs/tags/') && 'production' || 'staging' }}
-  cancel-in-progress: false
+  group: >-
+    ${{ github.event_name == 'pull_request' && format('front-pr-{0}', github.ref)
+    || format('front-deploy-{0}', startsWith(github.ref, 'refs/tags/') && 'production' || 'staging') }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   front:
